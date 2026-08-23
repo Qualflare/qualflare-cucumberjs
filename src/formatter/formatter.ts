@@ -1,10 +1,11 @@
+import * as fs from 'node:fs';
+
 import { Formatter, type IFormatterOptions } from '@cucumber/cucumber';
 import type { Envelope, GherkinDocument, Pickle, TestCase } from '@cucumber/messages';
 
 import { resolveConfig, type QualflareCucumberOptions, type ResolvedFormatterConfig } from '../config/resolve-config.js';
 import { QualflareHttpClient } from '../http/client.js';
 import { logger } from '../shared/logger.js';
-import { PACKAGE_VERSION } from '../config/version.js';
 import { AttachmentBudget } from './attachment-budget.js';
 import { AttemptTracker } from './attempt-tracker.js';
 import { buildCase, type FinishedCase } from './case-builder.js';
@@ -13,6 +14,7 @@ import { GherkinIndex } from './gherkin-index.js';
 import { buildHookIndex, type HookIndex } from './hook-index.js';
 import { RunHookTracker } from './run-hook-tracker.js';
 import { groupIntoSuites } from './suite-builder.js';
+import { buildHttpOptions } from './video-uploader.js';
 
 export default class QualflareCucumberFormatter extends Formatter {
   private readonly config: ResolvedFormatterConfig;
@@ -24,6 +26,14 @@ export default class QualflareCucumberFormatter extends Formatter {
   private readonly attemptTracker: AttemptTracker;
   private readonly runHookTracker = new RunHookTracker();
   private readonly finishedCases: FinishedCase[] = [];
+  /** One promise per `testCaseFinished` envelope, resolving once that
+   * scenario's `AttemptTracker.finish()` (which itself awaits any pending
+   * video uploads — see its doc comment) has settled and, if it produced a
+   * result, been pushed into `finishedCases`. `finished()` awaits all of
+   * these before building/uploading the Collect payload, so a scenario
+   * whose only attachment is a still-uploading video is never silently
+   * dropped from the report. */
+  private readonly pendingCaseBuilds: Promise<void>[] = [];
 
   constructor(options: IFormatterOptions) {
     super(options);
@@ -33,7 +43,12 @@ export default class QualflareCucumberFormatter extends Formatter {
     this.config = resolveConfig(options.parsedArgvOptions as QualflareCucumberOptions);
     this.hookIndex = buildHookIndex(options.supportCodeLibrary);
     this.attachmentBudget = new AttachmentBudget(this.config.maxTotalAttachmentBytes);
-    this.attemptTracker = new AttemptTracker(this.hookIndex, this.gherkin, this.config, this.attachmentBudget);
+    this.attemptTracker = new AttemptTracker(
+      this.hookIndex,
+      this.gherkin,
+      { ...this.config, httpOptions: buildHttpOptions(this.config) },
+      this.attachmentBudget,
+    );
 
     if (!this.config.enabled) {
       return;
@@ -91,15 +106,33 @@ export default class QualflareCucumberFormatter extends Formatter {
       return;
     }
     if (envelope.testCaseFinished) {
-      const finished = this.attemptTracker.finish(envelope.testCaseFinished);
-      if (finished) {
-        const pickle = this.pickleIndex.get(finished.pickleId);
-        if (pickle) {
-          this.finishedCases.push(buildCase(finished.uri, pickle, finished.collapsed, this.gherkin));
-        } else {
-          logger.warn(`could not resolve pickle "${finished.pickleId}" for a finished scenario — it will not be uploaded.`);
-        }
-      }
+      // finish() is async (it awaits any pending video upload for this
+      // scenario before its attachments can be read — see its doc comment),
+      // but dispatch() itself stays synchronous: cucumber-js's envelope
+      // stream doesn't wait for one 'envelope' listener's returned promise
+      // before emitting the next, so blocking here would just desync this
+      // handler from the events actually arriving. Instead, track the
+      // promise and await every one of them in finished(), before the
+      // Collect payload is ever built.
+      const pending = this.attemptTracker
+        .finish(envelope.testCaseFinished)
+        .then((finished) => {
+          if (!finished) {
+            return;
+          }
+          const pickle = this.pickleIndex.get(finished.pickleId);
+          if (pickle) {
+            this.finishedCases.push(buildCase(finished.uri, pickle, finished.collapsed, this.gherkin));
+          } else {
+            logger.warn(`could not resolve pickle "${finished.pickleId}" for a finished scenario — it will not be uploaded.`);
+          }
+        })
+        .catch((err) => {
+          // Mirrors onEnvelope's own catch — dispatch() itself can no longer
+          // catch an error raised inside this deferred chain.
+          logger.error('failed to process a cucumber-js event:', err);
+        });
+      this.pendingCaseBuilds.push(pending);
       return;
     }
     if (envelope.testRunHookStarted) {
@@ -118,6 +151,10 @@ export default class QualflareCucumberFormatter extends Formatter {
 
   async finished(): Promise<void> {
     try {
+      // Every scenario's Case must be fully built (attachments included,
+      // any pending video upload settled) before the Collect payload is
+      // assembled — see the testCaseFinished dispatch branch above.
+      await Promise.all(this.pendingCaseBuilds);
       if (this.config.enabled) {
         await this.uploadResults();
       }
@@ -130,19 +167,28 @@ export default class QualflareCucumberFormatter extends Formatter {
     const suites = groupIntoSuites(this.finishedCases, this.cwd, this.runHookTracker.buildSuite());
     if (suites.length === 0) {
       if (this.config.debug) {
-        logger.debug('no scenarios reported — skipping upload.');
+        logger.debug(`no scenarios reported — skipping ${this.config.outputFile ? 'file write' : 'upload'}.`);
       }
       return;
     }
     const payload = buildCollectPayload(suites, this.config);
-    const client = new QualflareHttpClient({
-      endpoint: this.config.apiEndpoint,
-      token: this.config.token,
-      timeoutMs: this.config.timeoutMs,
-      retry: this.config.retry,
-      userAgent: `qualflare-cucumberjs/${PACKAGE_VERSION}`,
-      debug: this.config.debug,
-    });
+
+    // Sharded CI: write this process's own Collect JSON to disk instead of
+    // POSTing it. A separate aggregation step (after all shards' files are
+    // collected, e.g. via CI artifact download) merges them into one launch
+    // via `qualflare-cli upload --shard <files...>` — see docs/LIMITATIONS.md.
+    // No HTTP client is ever constructed in this mode; resolveConfig already
+    // skipped the token-required check for the same reason.
+    if (this.config.outputFile) {
+      fs.writeFileSync(this.config.outputFile, JSON.stringify(payload));
+      logger.info(
+        `wrote Collect payload to ${this.config.outputFile} — not uploaded (outputFile mode). ` +
+          'Merge shard files and upload once via `qualflare-cli upload --shard <files...>`.',
+      );
+      return;
+    }
+
+    const client = new QualflareHttpClient(buildHttpOptions(this.config));
     try {
       const result = await client.send(payload);
       if (this.config.debug) {

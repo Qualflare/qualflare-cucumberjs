@@ -5,14 +5,22 @@ than discovered by surprise. Several stem from Qualflare backend capabilities th
 (shared with [`@qualflare/cypress`](https://github.com/Qualflare/qualflare-cypress)); others are
 specific to how cucumber-js's Cucumber-Messages event stream exposes information to a reporter.
 
-## No video upload
+## Video upload
 
-Qualflare has no blob/video-attachment storage yet (a separate, larger backend feature). This is a
-platform-level constraint, not specific to this reporter — any attachment with a video mimeType or a
-video file extension is refused outright, defensively, even if something upstream tried to attach one
-(e.g. via a browser driver's own video-recording feature).
+Video attachments (`.mp4`, `.webm`, `.mov`) upload to R2 via a presigned-URL flow, separate from the
+inline-base64 path small attachments take — a typical video is far too large to inline in the
+`/collect` request body. cucumber-js has no built-in video recording of its own, so the only source is
+a real `World.attach()`/`qualflare.attachment()`/`attachmentFromFile()` call given video content or a
+video file path — uploaded and attached to whichever scenario attempt made the call, like any other
+attachment.
 
-## One `cucumber-js` process = one Launch
+Controlled by two options: `uploadVideos` (default `true`) and `maxVideoBytes` (default 50MB, matching
+the server's own cap — checked before any upload attempt). A video that fails to upload (oversized,
+unsupported format, or a network/API error) is skipped with a logged warning, the same fail-open
+behavior as any other attachment — it never fails the run, independent of `failOnUploadError` (which
+is scoped to the final `/collect` POST, not to attachment resolution).
+
+## One `cucumber-js` process = one Launch (unless you merge sharded runs)
 
 Qualflare's `/api/v1/collect` endpoint creates exactly one new Launch per request, with no
 incremental or merge capability server-side. This reporter accumulates every scenario's results in
@@ -24,12 +32,60 @@ formatter's `finished()` lifecycle hook.
   results, so this does NOT multiply your Launch count.
 - **`--shard INDEX/TOTAL`** is a different thing entirely: each shard is a fully independent
   `cucumber-js` invocation (typically a separate CI job/machine), each with its own formatter
-  instance. If your CI shards this way, you will see N Launches for one CI run, not one combined
+  instance. cucumber-js's own sharding is a coordinator-only pre-run filter — a running formatter
+  has no API access to its own shard index/total at all, from cucumber-js or this reporter. If your
+  CI shards this way, you will see N Launches for one CI run by default, not one combined
   Launch — the same constraint `@qualflare/cypress` documents for multiple `cypress run` processes.
 
-A natural v2 extension (not built here) is an optional file-output mode that writes the exact
-`Collect` JSON shape to disk instead of POSTing, so a separate aggregation step could combine
-multiple shards' output before uploading once.
+### Merging shards into one Launch
+
+Set `outputFile` (or `QUALFLARE_OUTPUT_FILE`) instead of relying on the default POST-per-process
+behavior: the formatter writes its `Collect` JSON to that path and uploads nothing itself (no token
+is even required in this mode). Give each shard a unique path, upload it as a CI artifact, then
+merge and upload once via [`qualflare-cli`](https://github.com/Qualflare/qualflare-cli)'s `--shard`
+flag, which already implements exactly this file-merge pattern for every framework it supports.
+
+Video attachments are never uploaded in this mode — `uploadVideos` is forced off automatically,
+regardless of what's configured. Video upload needs a real token (this mode deliberately has none),
+and even a successful upload's `storageKey` has no equivalent in `qualflare-cli`'s merge parser and
+would be dropped at merge time anyway. A video-shaped `World.attach()`/`qualflare.attachment()`/
+`attachmentFromFile()` call is simply skipped, with a logged warning, the same as `uploadVideos: false`.
+
+GitHub Actions example (a matrix job per shard, then a final job that merges and uploads):
+
+```yaml
+jobs:
+  test:
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - run: npx cucumber-js --shard ${{ matrix.shard }}/4
+        env:
+          QUALFLARE_OUTPUT_FILE: qualflare-report-${{ matrix.shard }}.json
+          # No QUALFLARE_TOKEN here — outputFile mode never authenticates.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qualflare-report-${{ matrix.shard }}
+          path: qualflare-report-${{ matrix.shard }}.json
+
+  upload:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qualflare-report-*
+          merge-multiple: true
+      - run: |
+          npm install -g @qualflare/cli
+          qf login ci "$QF_TOKEN" --force
+          qf ci collect --shard qualflare-report-*.json
+        env:
+          QF_TOKEN: ${{ secrets.QF_TOKEN }}
+```
+
+`qf` auto-detects this reporter's JSON output from its content — no `--format` flag needed.
 
 ## Doc Strings and Data Tables have no dedicated wire field
 

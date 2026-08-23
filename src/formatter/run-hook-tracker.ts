@@ -48,13 +48,13 @@ export class RunHookTracker {
 
   /** Returns `undefined` if no run-hook failed — see the class doc comment
    * for why a passing BeforeAll/AfterAll produces no Case at all. */
-  buildSuite(): { name: string; category: 'bdd'; duration: number; cases: Case[] } | undefined {
+  buildSuite(): { name: string; category: 'cucumber'; duration: number; cases: Case[] } | undefined {
     if (this.failed.length === 0) {
       return undefined;
     }
     return {
       name: '(global hooks)',
-      category: 'bdd',
+      category: 'cucumber',
       duration: this.failed.reduce((sum, c) => sum + c.duration, 0),
       cases: this.failed,
     };

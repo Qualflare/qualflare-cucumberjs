@@ -35,7 +35,7 @@ export function groupIntoSuites(cases: FinishedCase[], cwd: string, extraSuite?:
     }
     suites.push({
       name: relativizeUri(uri, cwd),
-      category: 'bdd',
+      category: 'cucumber',
       duration: kases.reduce((sum, c) => sum + c.duration, 0),
       cases: kases.slice(0, MAX_CASES_PER_SUITE),
     });

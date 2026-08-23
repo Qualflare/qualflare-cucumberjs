@@ -15,7 +15,14 @@ import { messageDurationToNs } from '../shared/duration.js';
 import { logger } from '../shared/logger.js';
 import type { ManualStepRecord, RuntimeMessage } from '../runtime/message-types.js';
 import type { Attachment, CasePriority, Label, Link, Step } from '../shared/types.js';
-import { AttachmentBudget, resolvePendingAttachment, type AttachmentBudgetConfig } from './attachment-budget.js';
+import {
+  AttachmentBudget,
+  isVideoLike,
+  resolvePendingAttachment,
+  resolveVideoAttachment,
+  type AttachmentBudgetConfig,
+  type PendingAttachment,
+} from './attachment-budget.js';
 import { collapseAttempts, type AttemptSnapshot, type CollapsedResult } from './case-builder.js';
 import type { GherkinIndex } from './gherkin-index.js';
 import type { HookIndex } from './hook-index.js';
@@ -48,6 +55,14 @@ interface AttemptRecord {
   properties: Record<string, string>;
   attachments: Attachment[];
   stepCapWarned: boolean;
+  /** In-flight video uploads (see `resolveVideoAttachment`) started during
+   * this attempt but not yet resolved. Each one, once settled, pushes its
+   * resulting `Attachment` onto `attachments` above (mutating the array in
+   * place — never reassigning it — so a reference already captured
+   * elsewhere still sees the push; see `finish()`'s doc comment for why this
+   * matters). `finish()` awaits every attempt's own queue before collapsing,
+   * so `attachments` is always complete by the time it's read. */
+  pendingVideoUploads: Promise<void>[];
 }
 
 /**
@@ -88,6 +103,7 @@ export class AttemptTracker {
       properties: {},
       attachments: [],
       stepCapWarned: false,
+      pendingVideoUploads: [],
     };
     this.byTestCaseStartedId.set(e.id, record);
     const attempts = this.byTestCaseId.get(testCase.id) ?? [];
@@ -186,11 +202,26 @@ export class AttemptTracker {
 
     const stepIndex = this.resolveStepIndex(record, e.testStepId);
     const content = e.contentEncoding === 'BASE64' ? e.body : Buffer.from(e.body, 'utf8').toString('base64');
-    const resolved = resolvePendingAttachment(
-      { name: e.fileName || 'attachment', mimeType: e.mediaType, content, stepIndex },
-      this.config,
-      this.attachmentBudget,
-    );
+    this.resolveAttachment(record, { name: e.fileName || 'attachment', mimeType: e.mediaType, content, stepIndex });
+  }
+
+  /** Resolves one pending attachment, routing a video-like one through the
+   * async upload flow (tracked in `record.pendingVideoUploads` so `finish()`
+   * can wait for it) and everything else through the synchronous inline
+   * path — shared by the real `World.attach()` handler above and both
+   * `qualflare.attachment()`/`attachmentFromFile()` runtime-message cases
+   * below. */
+  private resolveAttachment(record: AttemptRecord, pending: PendingAttachment): void {
+    if (isVideoLike(pending.mimeType, pending.path)) {
+      const upload = resolveVideoAttachment(pending, this.config).then((resolved) => {
+        if (resolved) {
+          record.attachments.push(resolved);
+        }
+      });
+      record.pendingVideoUploads.push(upload);
+      return;
+    }
+    const resolved = resolvePendingAttachment(pending, this.config, this.attachmentBudget);
     if (resolved) {
       record.attachments.push(resolved);
     }
@@ -249,26 +280,12 @@ export class AttemptTracker {
       }
       case 'attachment': {
         const stepIndex = testStepId !== undefined ? record.stepIndexByTestStepId.get(testStepId) : undefined;
-        const resolved = resolvePendingAttachment(
-          { name: message.name, mimeType: message.mimeType, content: message.contentBase64, stepIndex },
-          this.config,
-          this.attachmentBudget,
-        );
-        if (resolved) {
-          record.attachments.push(resolved);
-        }
+        this.resolveAttachment(record, { name: message.name, mimeType: message.mimeType, content: message.contentBase64, stepIndex });
         return;
       }
       case 'attachment_from_file': {
         const stepIndex = testStepId !== undefined ? record.stepIndexByTestStepId.get(testStepId) : undefined;
-        const resolved = resolvePendingAttachment(
-          { name: message.name, mimeType: message.mimeType, path: message.path, stepIndex },
-          this.config,
-          this.attachmentBudget,
-        );
-        if (resolved) {
-          record.attachments.push(resolved);
-        }
+        this.resolveAttachment(record, { name: message.name, mimeType: message.mimeType, path: message.path, stepIndex });
         return;
       }
       case 'step_start': {
@@ -294,8 +311,21 @@ export class AttemptTracker {
 
   /** Returns the collapsed result once all attempts of this logical
    * scenario have arrived, or `undefined` if more attempts are coming
-   * (`willBeRetried === true`). */
-  finish(e: TestCaseFinished): FinishedAttempts | undefined {
+   * (`willBeRetried === true`).
+   *
+   * Async because it must first await every attempt's own
+   * `pendingVideoUploads` (any video attached anywhere across every retry
+   * of this scenario). This is load-bearing, not just tidiness:
+   * `collapseAttempts`/`buildCase` read `attachments` by REFERENCE, not by
+   * copy, and `buildCase` runs synchronously right after this resolves — a
+   * scenario whose ONLY attachment is a still-uploading video would have an
+   * EMPTY `attachments` array at that instant, and `buildCase` captures
+   * `attachments.length > 0 ? attachments : undefined` as a plain
+   * `undefined` VALUE right then, permanently — a later push onto the
+   * (still-live) array reference would no longer be visible through
+   * `undefined`. Awaiting here first guarantees `attachments` is complete
+   * before `buildCase` ever reads it. */
+  async finish(e: TestCaseFinished): Promise<FinishedAttempts | undefined> {
     const record = this.byTestCaseStartedId.get(e.testCaseStartedId);
     this.byTestCaseStartedId.delete(e.testCaseStartedId);
     if (!record) {
@@ -308,6 +338,11 @@ export class AttemptTracker {
     const testCaseId = record.testCase.id;
     const attempts = this.byTestCaseId.get(testCaseId) ?? [record];
     this.byTestCaseId.delete(testCaseId);
+
+    const pendingUploads = attempts.flatMap((a) => a.pendingVideoUploads);
+    if (pendingUploads.length > 0) {
+      await Promise.all(pendingUploads);
+    }
 
     const snapshots: AttemptSnapshot[] = attempts.map((a) => {
       const worst = a.stepResults.length > 0 ? getWorstTestStepResult(a.stepResults) : undefined;

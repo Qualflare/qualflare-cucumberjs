@@ -77,9 +77,10 @@ provider/build/PR) in [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md).
 
 ## Known limitations
 
-- **No video upload** — Qualflare has no blob/video-attachment storage yet.
-- **One `cucumber-js` process uploads as one Launch** — sharded (`--shard`) CI setups get multiple
-  Launches; `--parallel` does not, since it runs in-process worker threads.
+- **One `cucumber-js` process uploads as one Launch by default** — sharded (`--shard`) CI setups get
+  multiple Launches unless you merge them via `outputFile` + `qualflare-cli --shard` (see
+  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md)); `--parallel` does not need this, since it runs
+  in-process worker threads.
 - **Doc Strings and Data Tables** have no dedicated wire field — encoded as a step `Parameter`
   (workaround, not a first-class rendering).
 - **`BeforeStep`/`AfterStep` hooks are off by default** (`includeStepHooks`) — noisy for suites with

@@ -40,6 +40,9 @@ from that file (not from memory) if the two ever drift.
 | `includeStepHooks` | `QUALFLARE_INCLUDE_STEP_HOOKS` | `false` | Include `BeforeStep`/`AfterStep` hook executions as steps. Off by default — these run once per Gherkin step and can multiply the step count several-fold for suites with global per-step instrumentation hooks. |
 | `maxAttachmentBytes` | `QUALFLARE_MAX_ATTACHMENT_BYTES` | `1500000` | Per-attachment cap (bytes, decoded size) — an oversized attachment is skipped and logged, never silently truncated. |
 | `maxTotalAttachmentBytes` | `QUALFLARE_MAX_TOTAL_ATTACHMENT_BYTES` | `750000` | Cumulative cap across the whole run. |
+| `uploadVideos` | `QUALFLARE_UPLOAD_VIDEOS` | `true` | Upload video attachments (`this.attach()`/`qualflare.attachment()`/`attachmentFromFile()` given video content or a video file path) via a separate presigned-URL flow — see [`docs/LIMITATIONS.md`](./LIMITATIONS.md). |
+| `maxVideoBytes` | `QUALFLARE_MAX_VIDEO_BYTES` | `50000000` | Per-video cap (bytes), checked before any upload attempt. Matches the server's own 50MB cap — raising this past it only wastes an upload the server will reject. |
+| `outputFile` | `QUALFLARE_OUTPUT_FILE` | unset | When set, `finished()` writes the `Collect` JSON to this path instead of POSTing it — no `token` required in this mode. Also forces `uploadVideos` off (video upload needs a token, and its result would be dropped at merge time anyway). For merging sharded CI runs into one Launch — see [`docs/LIMITATIONS.md`](./LIMITATIONS.md). |
 | `debug` | `QUALFLARE_DEBUG` → `QF_DEBUG` | `false` | Logs request/response details to stderr with the token redacted before any log line is constructed. |
 | `enabled` | `QUALFLARE_ENABLED` | `true` | `false` fully disables tracking and upload — a complete no-op. |
 

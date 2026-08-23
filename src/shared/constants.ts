@@ -31,6 +31,10 @@ export const MAX_TAGS_PER_CASE = 64;
 export const MAX_TAG_LENGTH = 255;
 export const MAX_IDEMPOTENCY_KEY_CHARS = 255;
 
+/** Mirrors `launch.MaxAttachmentUploadFileSize` — the server's hard cap on a
+ * single `POST /api/v1/attachments/upload-url` request (video). */
+export const MAX_VIDEO_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 /** Client-side SOFT cap on steps recorded per scenario attempt — well under
  * the server's 1000-per-case hard cap (`MAX_STEPS_PER_CASE`). Once hit,
  * further steps within that attempt are dropped (with a one-time warning),

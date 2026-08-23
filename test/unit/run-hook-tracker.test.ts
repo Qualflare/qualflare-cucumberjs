@@ -44,7 +44,7 @@ describe('RunHookTracker', () => {
     const suite = tracker.buildSuite();
     expect(suite).toBeDefined();
     expect(suite!.name).toBe('(global hooks)');
-    expect(suite!.category).toBe('bdd');
+    expect(suite!.category).toBe('cucumber');
     expect(suite!.cases).toHaveLength(1);
     expect(suite!.cases[0]).toMatchObject({ name: 'BeforeAll hook', status: 'failed', duration: 5000, error: 'setup boom' });
   });

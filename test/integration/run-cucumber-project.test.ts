@@ -1,8 +1,10 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { execa } from 'execa';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { startMockCollectServer, type MockCollectServer } from './support/mock-collect-server.js';
 
@@ -86,7 +88,7 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
       expect(collect.suites.length).toBeGreaterThan(0);
       for (const suite of collect.suites) {
         if (suite.name !== '(global hooks)') {
-          expect(suite.category).toBe('bdd');
+          expect(suite.category).toBe('cucumber');
         }
       }
 
@@ -178,14 +180,115 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
         expect.arrayContaining([expect.objectContaining({ name: 'note', mimeType: 'text/plain' })]),
       );
 
-      // No video content ever ships in this fixture — a light structural
-      // guard that nothing accidentally attached one.
+      // A real qualflare.attachment() call with video content — must have
+      // gone through the presigned-upload-URL flow (storageKey, no inline
+      // content), not the inline-base64 path every other attachment above
+      // takes.
+      const videoCase = allCases.find((c) => c.name === 'attaches a video via qualflare.attachment()');
+      expect(videoCase).toBeDefined();
+      expect(videoCase.attachments).toHaveLength(1);
+      const videoAttachment = videoCase.attachments[0];
+      expect(videoAttachment.mimeType).toBe('video/mp4');
+      expect(videoAttachment.content).toBeUndefined();
+      expect(typeof videoAttachment.storageKey).toBe('string');
+      expect(videoAttachment.storageKey.length).toBeGreaterThan(0);
+
+      // The server actually received a presign request AND the PUT — not
+      // just a storageKey the client invented without uploading anything.
+      expect(server.uploads).toHaveLength(1);
+      const upload = server.uploads[0]!;
+      expect(upload.storageKey).toBe(videoAttachment.storageKey);
+      expect(upload.contentType).toBe('video/mp4');
+      expect(upload.body.toString('utf8')).toBe('qualflare-cucumberjs-integration-test-fake-video-bytes');
+
+      // Every OTHER attachment in this run still takes the inline path —
+      // the video-routing change didn't leak into non-video attachments.
       for (const c of allCases) {
+        if (c === videoCase) {
+          continue;
+        }
         for (const att of c.attachments ?? []) {
           expect(att.mimeType).not.toMatch(/^video\//);
+          expect(att.storageKey).toBeUndefined();
         }
       }
     },
     120_000,
   );
+
+  describe('outputFile mode (sharded-CI file-output path)', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qualflare-cucumberjs-output-file-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it(
+      'writes the Collect JSON to disk instead of uploading, and makes zero requests to the server',
+      async () => {
+        const outputFile = path.join(tmpDir, 'shard-0.json');
+        const requestCountBefore = server.requests.length;
+        const uploadCountBefore = server.uploads.length;
+
+        // Deliberately NO QUALFLARE_TOKEN — outputFile mode never
+        // authenticates, so resolveConfig must not throw its usual
+        // no-token error here (see resolve-config-output-file.test.ts for
+        // the unit-level version of this same assertion). Explicitly
+        // deleted (not set to `undefined`) so this doesn't depend on
+        // execa/child_process's undefined-env-value handling.
+        const env = { ...process.env, QUALFLARE_API_ENDPOINT: server.url, QUALFLARE_OUTPUT_FILE: outputFile };
+        delete env.QUALFLARE_TOKEN;
+        delete env.QF_TOKEN;
+
+        const result = await execa('npx', ['cucumber-js'], {
+          cwd: fixtureDir,
+          env,
+          reject: false,
+        });
+
+        if (!fs.existsSync(outputFile)) {
+          throw new Error(
+            `cucumber-js run did not produce ${outputFile}. exit code: ${result.exitCode}\n` +
+              `--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+          );
+        }
+
+        // The mock server received nothing from this run — file mode never
+        // constructs an HTTP client at all.
+        expect(server.requests.length).toBe(requestCountBefore);
+
+        // Regression check for a real bug found in self-review: this
+        // fixture project's video-attachment.feature scenario (a real
+        // qualflare.attachment() call with video content) previously still
+        // triggered a presign+PUT attempt even in outputFile mode, since
+        // uploadVideos defaulted true and nothing gated the video-upload
+        // path on outputFile. Checking server.uploads specifically (not
+        // just server.requests, which only counts /collect) is the point —
+        // the original bug shipped a test that only checked requests and
+        // passed anyway.
+        expect(server.uploads.length).toBe(uploadCountBefore);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON read back from disk, asserted field-by-field below
+        const collect = JSON.parse(fs.readFileSync(outputFile, 'utf8')) as any;
+        expect(collect.framework).toBe('cucumber');
+        expect(Array.isArray(collect.suites)).toBe(true);
+        expect(collect.suites.length).toBeGreaterThan(0);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const allCases = collect.suites.flatMap((s: any) => s.cases as any[]);
+        expect(allCases.some((c) => c.name === 'passes normally')).toBe(true);
+
+        // The video-attachment scenario's attachment was skipped entirely
+        // (not uploaded, not inlined) — mirrors uploadVideos: false's
+        // existing behavior.
+        const videoCase = allCases.find((c) => c.name === 'attaches a video via qualflare.attachment()');
+        expect(videoCase).toBeDefined();
+        expect(videoCase.attachments ?? []).toHaveLength(0);
+      },
+      120_000,
+    );
+  });
 });

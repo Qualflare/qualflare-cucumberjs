@@ -1,17 +1,43 @@
 import { AttachmentContentEncoding, TestStepResultStatus } from '@cucumber/messages';
-import { describe, expect, it } from 'vitest';
+import { MockAgent, setGlobalDispatcher } from 'undici';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AttachmentBudget } from '../../src/formatter/attachment-budget.js';
 import { AttemptTracker } from '../../src/formatter/attempt-tracker.js';
 import { GherkinIndex } from '../../src/formatter/gherkin-index.js';
 import { buildHookIndexFromRaw } from './support/fake-hook-index.js';
 
+const ENDPOINT = 'https://qualflare.test';
+
 const CONFIG = {
   includeStepHooks: false,
   attachScreenshots: true,
   maxAttachmentBytes: 1_500_000,
   maxTotalAttachmentBytes: 750_000,
+  uploadVideos: true,
+  maxVideoBytes: 50_000_000,
+  httpOptions: {
+    endpoint: ENDPOINT,
+    token: 'test-token',
+    timeoutMs: 2000,
+    retry: { max: 0, baseDelayMs: 1, maxDelayMs: 5 },
+    userAgent: 'qualflare-cucumberjs-test',
+    debug: false,
+  },
 };
+
+let mockAgent: MockAgent;
+
+beforeEach(() => {
+  mockAgent = new MockAgent();
+  mockAgent.disableNetConnect();
+  setGlobalDispatcher(mockAgent);
+});
+
+afterEach(async () => {
+  await mockAgent.close();
+  vi.restoreAllMocks();
+});
 
 function passedResult(nanos = 1000) {
   return { duration: { seconds: 0, nanos }, status: TestStepResultStatus.PASSED };
@@ -62,7 +88,7 @@ function timestamp() {
 }
 
 describe('AttemptTracker', () => {
-  it('builds a single passing attempt with no retry', () => {
+  it('builds a single passing attempt with no retry', async () => {
     const { tracker } = makeTracker();
     const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
     const p = pickle();
@@ -70,7 +96,7 @@ describe('AttemptTracker', () => {
     tracker.begin({ id: 'tcs-1', testCaseId: tc.id, attempt: 0, timestamp: timestamp() }, tc, p);
     tracker.stepStarted({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', timestamp: timestamp() });
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false });
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false });
 
     expect(finished).toBeDefined();
     expect(finished!.collapsed.status).toBe('passed');
@@ -79,7 +105,7 @@ describe('AttemptTracker', () => {
     expect(finished!.collapsed.steps).toHaveLength(1);
   });
 
-  it('returns undefined while willBeRetried is true, then collapses all attempts once the final one lands', () => {
+  it('returns undefined while willBeRetried is true, then collapses all attempts once the final one lands', async () => {
     const { tracker } = makeTracker();
     const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
     const p = pickle();
@@ -92,13 +118,13 @@ describe('AttemptTracker', () => {
       testStepResult: failedResult('boom'),
       timestamp: timestamp(),
     });
-    const midRetry = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: true });
+    const midRetry = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: true });
     expect(midRetry).toBeUndefined();
 
     // Attempt 1: passes, final.
     tracker.begin({ id: 'tcs-2', testCaseId: tc.id, attempt: 1, timestamp: timestamp() }, tc, p);
     tracker.stepFinished({ testCaseStartedId: 'tcs-2', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    const finished = tracker.finish({ testCaseStartedId: 'tcs-2', timestamp: timestamp(), willBeRetried: false });
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-2', timestamp: timestamp(), willBeRetried: false });
 
     expect(finished).toBeDefined();
     expect(finished!.collapsed.status).toBe('passed');
@@ -108,7 +134,7 @@ describe('AttemptTracker', () => {
     expect(finished!.collapsed.duration).toBe(2000);
   });
 
-  it('always includes a Before/After hook as a synthetic step', () => {
+  it('always includes a Before/After hook as a synthetic step', async () => {
     const hookIndex = buildHookIndexFromRaw([{ id: 'hook-before', kind: 'before' }]);
     const { tracker } = makeTracker(hookIndex);
     const tc = testCase([{ id: 'ts-hook', hookId: 'hook-before' }, { id: 'ts-1', pickleStepId: 'step-1' }]);
@@ -117,13 +143,13 @@ describe('AttemptTracker', () => {
     tracker.begin({ id: 'tcs-1', testCaseId: tc.id, attempt: 0, timestamp: timestamp() }, tc, p);
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-hook', testStepResult: passedResult(), timestamp: timestamp() });
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
 
     expect(finished.collapsed.steps).toHaveLength(2);
     expect(finished.collapsed.steps![0]).toMatchObject({ keyword: 'Before', status: 'passed' });
   });
 
-  it('excludes BeforeStep/AfterStep by default, and includes them as flat (un-nested) steps when enabled', () => {
+  it('excludes BeforeStep/AfterStep by default, and includes them as flat (un-nested) steps when enabled', async () => {
     const hookIndex = buildHookIndexFromRaw([
       { id: 'hook-before-step', kind: 'beforeStep' },
       { id: 'hook-after-step', kind: 'afterStep' },
@@ -142,7 +168,7 @@ describe('AttemptTracker', () => {
       for (const id of ['ts-before-step', 'ts-1', 'ts-after-step']) {
         tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: id, testStepResult: passedResult(), timestamp: timestamp() });
       }
-      const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+      const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
       expect(finished.collapsed.steps).toHaveLength(1);
     }
 
@@ -160,7 +186,7 @@ describe('AttemptTracker', () => {
       for (const id of ['ts-before-step', 'ts-1', 'ts-after-step']) {
         tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: id, testStepResult: passedResult(), timestamp: timestamp() });
       }
-      const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+      const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
       expect(finished.collapsed.steps).toHaveLength(3);
       expect(finished.collapsed.steps!.map((s) => s.keyword)).toEqual(['BeforeStep', undefined, 'AfterStep']);
       // Neither hook step is nested under an unrelated sibling.
@@ -169,7 +195,7 @@ describe('AttemptTracker', () => {
     }
   });
 
-  it('applies a reserved-media-type runtime message as a model mutation, not a literal attachment', () => {
+  it('applies a reserved-media-type runtime message as a model mutation, not a literal attachment', async () => {
     const { tracker } = makeTracker();
     const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
     const p = pickle();
@@ -182,13 +208,13 @@ describe('AttemptTracker', () => {
       testCaseStartedId: 'tcs-1',
     });
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
 
     expect(finished.collapsed.labels).toEqual([{ name: 'epic', value: 'Checkout' }]);
     expect(finished.collapsed.attachments).toHaveLength(0);
   });
 
-  it('resolves a real attachment and correlates it to the step it was attached during', () => {
+  it('resolves a real attachment and correlates it to the step it was attached during', async () => {
     const { tracker } = makeTracker();
     const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
     const p = pickle();
@@ -204,9 +230,53 @@ describe('AttemptTracker', () => {
       testStepId: 'ts-1',
     });
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    const finished = tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
 
     expect(finished.collapsed.attachments).toHaveLength(1);
     expect(finished.collapsed.attachments[0]).toMatchObject({ name: 'note.txt', mimeType: 'text/plain', stepIndex: 0 });
+  });
+
+  it('waits for a pending video upload before collapsing, so a video-only attachment is never lost', async () => {
+    // Regression test for a real bug found in self-review: collapseAttempts/
+    // buildCase read `attachments` BY REFERENCE and run synchronously right
+    // after finish() resolves. If finish() didn't await the video's still-
+    // in-flight upload here, buildCase would see an EMPTY attachments array
+    // at that instant and capture a bare `undefined` for a scenario whose
+    // ONLY attachment is this video — a later push onto the (still-live)
+    // array would then be invisible, since `undefined` is a value, not a
+    // reference to the array.
+    const { tracker } = makeTracker();
+    const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
+    const p = pickle();
+
+    const pool = mockAgent.get(ENDPOINT);
+    pool
+      .intercept({ path: '/api/v1/attachments/upload-url', method: 'POST' })
+      .reply(200, JSON.stringify({ storageKey: 'case-run-attachments/proj/clip.mp4', uploadUrl: `${ENDPOINT}/put-here` }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    pool.intercept({ path: '/put-here', method: 'PUT' }).reply(200, '');
+
+    tracker.begin({ id: 'tcs-1', testCaseId: tc.id, attempt: 0, timestamp: timestamp() }, tc, p);
+    tracker.stepStarted({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', timestamp: timestamp() });
+    tracker.attachment({
+      body: Buffer.from('fake video bytes').toString('base64'),
+      contentEncoding: AttachmentContentEncoding.BASE64,
+      mediaType: 'video/mp4',
+      fileName: 'clip.mp4',
+      testCaseStartedId: 'tcs-1',
+      testStepId: 'ts-1',
+    });
+    tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
+    // finish() is called immediately, WITHOUT waiting for the upload to
+    // settle first — its own internal await is what must make this correct.
+    const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
+
+    expect(finished.collapsed.attachments).toHaveLength(1);
+    expect(finished.collapsed.attachments[0]).toMatchObject({
+      name: 'clip.mp4',
+      mimeType: 'video/mp4',
+      storageKey: 'case-run-attachments/proj/clip.mp4',
+    });
   });
 });

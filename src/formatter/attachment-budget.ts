@@ -1,18 +1,27 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import type { SendOptions } from '../http/client.js';
 import { logger } from '../shared/logger.js';
 import type { Attachment } from '../shared/types.js';
+import { resolveVideoMimeType, uploadVideoBytes, readVideoFile } from './video-uploader.js';
 
-/** Extensions/mime-prefixes this reporter must never attach — Qualflare has
- * no video/blob-attachment support yet (a separate, unbuilt backend
- * feature), the same constraint `@qualflare/cypress` documents. */
+/** Extensions/mime-prefixes routed through the video-upload flow
+ * (`resolveVideoAttachment`) instead of the inline-base64 path below.
+ * Broader than the server's own MIME allowlist (`.avi`/`.mkv` included) so
+ * this still correctly IDENTIFIES a video attachment even in a format the
+ * server can't accept — `resolveVideoAttachment`/`resolveVideoMimeType` is
+ * what actually enforces the narrower allowlist and warns/skips a format
+ * outside it. */
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.avi', '.mkv']);
 
 export interface AttachmentBudgetConfig {
   attachScreenshots: boolean;
   maxAttachmentBytes: number;
   maxTotalAttachmentBytes: number;
+  uploadVideos: boolean;
+  maxVideoBytes: number;
+  httpOptions: SendOptions;
 }
 
 /** One `World.attach()` call (real user attachment, or `qualflare.attachment
@@ -59,7 +68,7 @@ export class AttachmentBudget {
 
 type ReadResult = { skipped: false; content: string } | { skipped: true; reason: string };
 
-function isVideoLike(mimeType: string | undefined, filePath: string | undefined): boolean {
+export function isVideoLike(mimeType: string | undefined, filePath: string | undefined): boolean {
   if (mimeType?.toLowerCase().startsWith('video/')) {
     return true;
   }
@@ -99,15 +108,19 @@ function readAttachmentFile(filePath: string, maxAttachmentBytes: number, budget
 }
 
 /**
- * Resolves one pending attachment into a wire `Attachment`, or `undefined`
- * if it should be skipped entirely (per the plan's resolved decision — an
- * oversized/over-budget/video attachment is dropped, not degraded to a
- * contentless stub, since the server's `path` field is explicitly
+ * Resolves one NON-video pending attachment into a wire `Attachment`, or
+ * `undefined` if it should be skipped entirely (per the plan's resolved
+ * decision — an oversized/over-budget attachment is dropped, not degraded
+ * to a contentless stub, since the server's `path` field is explicitly
  * informational/never-fetched). Unlike `@qualflare/cypress`'s
  * `resolveAttachments()` (which batch-resolves a Case's whole array at
  * case-finish time), this resolves one attachment at a time as its
  * `attachment` envelope arrives — matching cucumber-js's per-envelope
  * event stream.
+ *
+ * Callers MUST check `isVideoLike()` first and route a video-like pending
+ * attachment to `resolveVideoAttachment()` instead — this function assumes
+ * it is not one (see `attempt-tracker.ts`'s call sites).
  */
 export function resolvePendingAttachment(
   pending: PendingAttachment,
@@ -115,13 +128,6 @@ export function resolvePendingAttachment(
   budget: AttachmentBudget,
 ): Attachment | undefined {
   if (!config.attachScreenshots) {
-    return undefined;
-  }
-  if (isVideoLike(pending.mimeType, pending.path)) {
-    logger.warn(
-      `refusing to attach "${pending.name}": video attachments are not supported yet ` +
-        `(${pending.path ?? pending.mimeType ?? 'unknown'}).`,
-    );
     return undefined;
   }
   if (pending.content !== undefined) {
@@ -155,4 +161,64 @@ export function resolvePendingAttachment(
     };
   }
   return undefined;
+}
+
+/**
+ * Resolves one video-like pending attachment (`isVideoLike()` already true)
+ * into a wire `Attachment` carrying `storageKey`/`fileSize` instead of
+ * `content`, via the presigned-upload-URL flow — or `undefined` if it should
+ * be skipped (uploads disabled, unsupported format, oversized, or a
+ * network/API error; each case logs why). Async, unlike
+ * `resolvePendingAttachment` — see `attempt-tracker.ts`'s
+ * `pendingVideoUploads` for how callers reconcile that with cucumber-js's
+ * synchronous, per-envelope event stream.
+ */
+export async function resolveVideoAttachment(pending: PendingAttachment, config: AttachmentBudgetConfig): Promise<Attachment | undefined> {
+  if (!config.attachScreenshots) {
+    return undefined;
+  }
+  if (!config.uploadVideos) {
+    logger.info(`skipping video attachment "${pending.name}": uploadVideos is disabled.`);
+    return undefined;
+  }
+  const resolved = resolveVideoMimeType(pending.mimeType, pending.path);
+  if (!resolved) {
+    logger.warn(`skipping video attachment "${pending.name}": unsupported video format.`);
+    return undefined;
+  }
+
+  let body: Buffer;
+  if (pending.content !== undefined) {
+    const bytes = Buffer.byteLength(pending.content, 'base64');
+    if (bytes > config.maxVideoBytes) {
+      logger.warn(
+        `skipping video attachment "${pending.name}": ${bytes} bytes exceeds the configured maxVideoBytes cap of ${config.maxVideoBytes} bytes.`,
+      );
+      return undefined;
+    }
+    body = Buffer.from(pending.content, 'base64');
+  } else if (pending.path) {
+    const read = readVideoFile(pending.path, config.maxVideoBytes);
+    if (!read) {
+      // readVideoFile already logged why.
+      return undefined;
+    }
+    body = read;
+  } else {
+    return undefined;
+  }
+
+  const filename = pending.path ? path.basename(pending.path) : `${pending.name}${resolved.extension}`;
+  const uploaded = await uploadVideoBytes(body, filename, resolved.mimeType, config.httpOptions);
+  if (!uploaded) {
+    // uploadVideoBytes already logged why.
+    return undefined;
+  }
+  return {
+    name: pending.name,
+    mimeType: resolved.mimeType,
+    storageKey: uploaded.storageKey,
+    fileSize: uploaded.fileSize,
+    stepIndex: pending.stepIndex,
+  };
 }
