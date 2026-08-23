@@ -1,0 +1,21 @@
+{
+  "default": {
+    "format": [
+      "../../../../dist/formatter/index.js"
+    ],
+    "formatOptions": {
+      "branch": null,
+      "commit": null,
+      "failOnUploadError": true,
+      "environment": "development"
+    },
+    "paths": [
+      "features/"
+    ],
+    "require": [
+      "steps/**/*.js"
+    ],
+    "retry": 1,
+    "retryTagFilter": "@flaky"
+  }
+}

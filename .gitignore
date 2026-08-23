@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Cucumber artifacts (from this repo's own integration-test fixture project)
+test/integration/fixtures/**/reports/
+
+# example project artifacts
+examples/**/node_modules/
+examples/**/reports/

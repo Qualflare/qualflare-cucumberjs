@@ -1,0 +1,84 @@
+{
+  "name": "@qualflare/cucumberjs",
+  "version": "0.1.0",
+  "description": "Native CucumberJS reporter for the Qualflare test-management platform.",
+  "keywords": [
+    "qualflare",
+    "cucumber",
+    "cucumberjs",
+    "bdd",
+    "gherkin",
+    "test-reporter",
+    "test-results",
+    "flaky-tests",
+    "test-reporting"
+  ],
+  "homepage": "https://qualflare.com",
+  "bugs": {
+    "url": "https://github.com/Qualflare/qualflare-cucumberjs/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Qualflare/qualflare-cucumberjs.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Qualflare",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./formatter": {
+      "types": "./dist/formatter/index.d.ts",
+      "import": "./dist/formatter/index.js",
+      "require": "./dist/formatter/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "@cucumber/cucumber": ">=10.8.0 <14"
+  },
+  "dependencies": {
+    "@cucumber/messages": "^34.0.0",
+    "ci-info": "^4.0.0",
+    "undici": "^6.19.8"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^13.2.1",
+    "@types/node": "^18.19.50",
+    "eslint": "^9.9.1",
+    "execa": "^9.3.1",
+    "prettier": "^3.3.3",
+    "tsup": "^8.2.4",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.5.0",
+    "vitest": "^2.0.5"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run test/unit",
+    "test:integration": "vitest run test/integration --pool=forks --testTimeout=120000",
+    "test:all": "npm run test && npm run test:integration",
+    "prepublishOnly": "npm run build"
+  }
+}

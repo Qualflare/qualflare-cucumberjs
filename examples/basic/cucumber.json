@@ -1,0 +1,10 @@
+{
+  "default": {
+    "format": ["@qualflare/cucumberjs/formatter"],
+    "formatOptions": {
+      "environment": "development"
+    },
+    "paths": ["features/"],
+    "require": ["steps/**/*.js"]
+  }
+}
