@@ -1,59 +1,91 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { QualflareConfigError, resolveConfig } from '../../src/config/resolve-config.js';
+import { resolveConfig } from '../../src/config/resolve-config.js';
 
 // No git/CI detection matters for these assertions — stub both to avoid a
 // real `git` subprocess / process.env dependency, mirroring
 // resolve-config-detection.test.ts's own fakes.
 const NOOP_DEPS = { detectGit: () => ({}), detectCi: () => ({}) };
 
+const ORIGINAL_ARGV = process.argv;
+
 afterEach(() => {
   vi.unstubAllEnvs();
+  process.argv = ORIGINAL_ARGV;
 });
 
-describe('resolveConfig — outputFile mode', () => {
-  it('throws QualflareConfigError when enabled with no token and no outputFile (normal-mode default)', () => {
-    expect(() => resolveConfig({}, NOOP_DEPS)).toThrow(QualflareConfigError);
+describe('resolveConfig — outputDir', () => {
+  it('defaults outputDir to ./qualflare-results', () => {
+    expect(resolveConfig({}, NOOP_DEPS).outputDir).toBe('./qualflare-results');
   });
 
-  it('does NOT throw when outputFile is set, even with no token — this process never authenticates in file mode', () => {
-    const config = resolveConfig({ outputFile: '/tmp/shard-0.json' }, NOOP_DEPS);
-    expect(config.outputFile).toBe('/tmp/shard-0.json');
-    expect(config.token).toBe('');
+  it('honors an explicit outputDir option', () => {
+    expect(resolveConfig({ outputDir: './custom-dir' }, NOOP_DEPS).outputDir).toBe('./custom-dir');
   });
 
-  it('resolves outputFile from the QUALFLARE_OUTPUT_FILE environment variable', () => {
-    vi.stubEnv('QUALFLARE_OUTPUT_FILE', '/tmp/from-env.json');
-    const config = resolveConfig({ token: 'x' }, NOOP_DEPS);
-    expect(config.outputFile).toBe('/tmp/from-env.json');
+  it('resolves outputDir from QUALFLARE_OUTPUT_DIR', () => {
+    vi.stubEnv('QUALFLARE_OUTPUT_DIR', './from-env');
+    expect(resolveConfig({}, NOOP_DEPS).outputDir).toBe('./from-env');
   });
 
-  it('an explicit outputFile option wins over the environment variable', () => {
-    vi.stubEnv('QUALFLARE_OUTPUT_FILE', '/tmp/from-env.json');
-    const config = resolveConfig({ outputFile: '/tmp/from-option.json' }, NOOP_DEPS);
-    expect(config.outputFile).toBe('/tmp/from-option.json');
+  it('an explicit outputDir option wins over the environment variable', () => {
+    vi.stubEnv('QUALFLARE_OUTPUT_DIR', './from-env');
+    expect(resolveConfig({ outputDir: './from-option' }, NOOP_DEPS).outputDir).toBe('./from-option');
   });
 
-  it('an explicit outputFile: "" falls through exactly like an unset option (still requires a token)', () => {
-    expect(() => resolveConfig({ outputFile: '' }, NOOP_DEPS)).toThrow(QualflareConfigError);
+  it('an explicit outputDir: "" falls through to the default', () => {
+    expect(resolveConfig({ outputDir: '' }, NOOP_DEPS).outputDir).toBe('./qualflare-results');
   });
 
-  // Regression test: outputFile mode originally only guarded the final
-  // /collect POST — the separate video-upload HTTP path (presign + PUT)
-  // had no outputFile check anywhere and fired real, token-less requests
-  // even in "offline" file mode. Found via adversarial self-review,
-  // empirically reproduced against a real cucumber-js run before being
-  // fixed by forcing uploadVideos off here, centrally.
-  it('forces uploadVideos off in outputFile mode, even when explicitly requested true', () => {
-    const config = resolveConfig({ outputFile: '/tmp/shard-0.json', uploadVideos: true }, NOOP_DEPS);
-    expect(config.uploadVideos).toBe(false);
+  it('never throws for a missing token — token no longer exists', () => {
+    expect(() => resolveConfig({}, NOOP_DEPS)).not.toThrow();
+  });
+});
+
+describe('resolveConfig — shardIndex', () => {
+  it('is undefined when nothing indicates a shard', () => {
+    process.argv = ['node', 'cucumber-js'];
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBeUndefined();
   });
 
-  it('leaves uploadVideos at its configured/default value in normal (non-outputFile) mode', () => {
-    const defaultConfig = resolveConfig({ token: 'x' }, NOOP_DEPS);
-    expect(defaultConfig.uploadVideos).toBe(true);
+  it('honors an explicit shardIndex option', () => {
+    expect(resolveConfig({ shardIndex: 9 }, NOOP_DEPS).shardIndex).toBe(9);
+  });
 
-    const explicitConfig = resolveConfig({ token: 'x', uploadVideos: false }, NOOP_DEPS);
-    expect(explicitConfig.uploadVideos).toBe(false);
+  it('reads QUALFLARE_SHARD_INDEX when no explicit option is given', () => {
+    vi.stubEnv('QUALFLARE_SHARD_INDEX', '3');
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBe(3);
+  });
+
+  it('an explicit option wins over the environment variable', () => {
+    vi.stubEnv('QUALFLARE_SHARD_INDEX', '3');
+    expect(resolveConfig({ shardIndex: 9 }, NOOP_DEPS).shardIndex).toBe(9);
+  });
+
+  // cucumber-js parses `--shard INDEX/TOTAL` itself, but routes it to
+  // `configuration.sources.shard` — a formatter only ever receives
+  // `configuration.options`, so there is no supported way to read it.
+  // Sniffing argv is a best-effort convenience for the common CI case where
+  // the flag really is on the command line; it is deliberately the LAST
+  // fallback, below the env var that always works.
+  it('falls back to parsing --shard from argv, converting 1-based to 0-based', () => {
+    process.argv = ['node', 'cucumber-js', '--shard', '2/4'];
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBe(1);
+  });
+
+  it('handles the --shard=N/M form too', () => {
+    process.argv = ['node', 'cucumber-js', '--shard=1/3'];
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBe(0);
+  });
+
+  it('ignores a malformed --shard value rather than reporting a wrong shard', () => {
+    process.argv = ['node', 'cucumber-js', '--shard', 'not-a-shard'];
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBeUndefined();
+  });
+
+  it('QUALFLARE_SHARD_INDEX wins over argv --shard', () => {
+    vi.stubEnv('QUALFLARE_SHARD_INDEX', '7');
+    process.argv = ['node', 'cucumber-js', '--shard', '2/4'];
+    expect(resolveConfig({}, NOOP_DEPS).shardIndex).toBe(7);
   });
 });
