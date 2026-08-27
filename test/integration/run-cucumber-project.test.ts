@@ -56,6 +56,10 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
       // execa/child_process's undefined-env-value handling.
       const env = {
         ...process.env,
+        // Deliberately still pointed at the mock server even though
+        // apiEndpoint is gone as an option: if any upload path somehow
+        // survived, this is where it would land, and the tripwire below
+        // would catch it.
         QUALFLARE_API_ENDPOINT: server.url,
         QUALFLARE_OUTPUT_DIR: outputDir,
       };

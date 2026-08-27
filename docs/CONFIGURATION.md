@@ -15,8 +15,6 @@ from that file (not from memory) if the two ever drift.
 
 | Option | Env var(s) | Default | Notes |
 |---|---|---|---|
-| `token` | `QUALFLARE_TOKEN` → `QF_TOKEN` | *(required)* | Throws a `QualflareConfigError` when cucumber-js constructs the formatter if unresolved and `enabled` isn't `false` — fails before any scenario runs. |
-| `apiEndpoint` | `QUALFLARE_API_ENDPOINT` | `https://api.qualflare.com` | |
 | `environment` | `QUALFLARE_ENVIRONMENT` → `QF_ENVIRONMENT` | `development` | Must already exist in your Qualflare project (server returns 404 otherwise) — every project seeds `development`/`staging`/`production`/`qa` by default. |
 | `language` | `QUALFLARE_LANGUAGE` → `QF_LANGUAGE` | `en-US` | BCP47. |
 | `milestone` | `QUALFLARE_MILESTONE` → `QF_MILESTONE` | `null` | A milestone sequence number; values `< 1` are treated as unset. |
@@ -31,19 +29,14 @@ from that file (not from memory) if the two ever drift.
 | `ciBuildNumber` | — | auto-detected | |
 | `ciRunUrl` | — | auto-detected | |
 | `ciPrNumber` | — | auto-detected | Must be a positive integer; an unparsable/invalid value is omitted, never sent as garbage. |
-| `timeoutMs` | `QUALFLARE_TIMEOUT_MS` | `120000` | Per-attempt request timeout, in milliseconds (not a duration string). |
-| `retry.max` | `QUALFLARE_RETRY_MAX` → `QF_RETRY_MAX` | `3` | |
-| `retry.baseDelayMs` | `QUALFLARE_RETRY_BASE_DELAY_MS` | `1000` | |
-| `retry.maxDelayMs` | `QUALFLARE_RETRY_MAX_DELAY_MS` | `30000` | |
-| `failOnUploadError` | `QUALFLARE_FAIL_ON_UPLOAD_ERROR` | `false` | When `false` (default), a Qualflare upload failure is logged but never fails an otherwise-green `cucumber-js` run. Set `true` for stricter CI gating. |
 | `attachScreenshots` | `QUALFLARE_ATTACH_SCREENSHOTS` | `true` | Gates every attachment this reporter uploads — both a real `this.attach()` call you already make (e.g. a Playwright screenshot in an `After` hook) and anything sent via `qualflare.attachment()`/`attachmentFromFile()`. |
 | `includeStepHooks` | `QUALFLARE_INCLUDE_STEP_HOOKS` | `false` | Include `BeforeStep`/`AfterStep` hook executions as steps. Off by default — these run once per Gherkin step and can multiply the step count several-fold for suites with global per-step instrumentation hooks. |
 | `maxAttachmentBytes` | `QUALFLARE_MAX_ATTACHMENT_BYTES` | `1500000` | Per-attachment cap (bytes, decoded size) — an oversized attachment is skipped and logged, never silently truncated. |
 | `maxTotalAttachmentBytes` | `QUALFLARE_MAX_TOTAL_ATTACHMENT_BYTES` | `750000` | Cumulative cap across the whole run. |
-| `uploadVideos` | `QUALFLARE_UPLOAD_VIDEOS` | `true` | Upload video attachments (`this.attach()`/`qualflare.attachment()`/`attachmentFromFile()` given video content or a video file path) via a separate presigned-URL flow — see [`docs/LIMITATIONS.md`](./LIMITATIONS.md). |
 | `maxVideoBytes` | `QUALFLARE_MAX_VIDEO_BYTES` | `50000000` | Per-video cap (bytes), checked before any upload attempt. Matches the server's own 50MB cap — raising this past it only wastes an upload the server will reject. |
-| `outputFile` | `QUALFLARE_OUTPUT_FILE` | unset | When set, `finished()` writes the `Collect` JSON to this path instead of POSTing it — no `token` required in this mode. Also forces `uploadVideos` off (video upload needs a token, and its result would be dropped at merge time anyway). For merging sharded CI runs into one Launch — see [`docs/LIMITATIONS.md`](./LIMITATIONS.md). |
-| `debug` | `QUALFLARE_DEBUG` → `QF_DEBUG` | `false` | Logs request/response details to stderr with the token redacted before any log line is constructed. |
+| `outputDir` | `QUALFLARE_OUTPUT_DIR` | `./qualflare-results` | Directory this process writes its report file (and any video attachments) into. Always active — the formatter never uploads. Every file is uniquely named, so parallel shards can share one directory safely. Upload with `qf <identifier> collect <outputDir>`. |
+| `shardIndex` | `QUALFLARE_SHARD_INDEX` | auto | This process's 0-based shard position, stamped onto every case. Falls back to scanning `process.argv` for cucumber-js's `--shard INDEX/TOTAL` (whose index is 1-based, and is converted). An attribution label only — `qualflare-cli` merges by directory contents, never by this. |
+| `debug` | `QUALFLARE_DEBUG` → `QF_DEBUG` | `false` | Logs extra detail to stderr. |
 | `enabled` | `QUALFLARE_ENABLED` | `true` | `false` fully disables tracking and upload — a complete no-op. |
 
 ## Branch/commit auto-detection

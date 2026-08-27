@@ -4,10 +4,14 @@
 [![CI](https://github.com/Qualflare/qualflare-cucumberjs/actions/workflows/ci.yml/badge.svg)](https://github.com/Qualflare/qualflare-cucumberjs/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 
-A native CucumberJS reporter for [Qualflare](https://qualflare.com) — uploads test results directly
-from your `cucumber-js` run: Feature/Scenario status, real retry counts, screenshots, Given/When/Then
-step traces, Scenario Outline rows, and author-facing metadata (labels, links, tags, custom
-attachments). No post-hoc file parsing, no intermediate report format.
+A native CucumberJS reporter for [Qualflare](https://qualflare.com) — captures test results directly
+from your `cucumber-js` run: Feature/Scenario status, real retry counts, screenshots, videos,
+Given/When/Then step traces, Scenario Outline rows, and author-facing metadata (labels, links, tags,
+custom attachments).
+
+The formatter itself makes **no network calls**. It writes a report directory, and
+[`qualflare-cli`](https://github.com/Qualflare/qualflare-cli) uploads it — which is what lets any
+number of sharded CI jobs merge into a single Launch.
 
 ## Install
 
@@ -15,8 +19,15 @@ attachments). No post-hoc file parsing, no intermediate report format.
 npm install --save-dev @qualflare/cucumberjs
 ```
 
-Requires `@cucumber/cucumber` `>=10.8.0 <14` (installed separately as a peer dependency) and Node
-`>=18`.
+Requires `@cucumber/cucumber` `>=10.8.0` (installed separately as a peer dependency) and Node
+`>=18`. You also need [`qualflare-cli`](https://github.com/Qualflare/qualflare-cli) **v0.1.16 or
+newer** to upload what this formatter writes.
+
+The peer range is deliberately open-ended rather than capped at a known-good major, so a new
+cucumber-js release never hard-blocks `npm install` for you. Every major from 10.8 through 13 is
+exercised in CI against a real `cucumber-js` run; newer majors are untested but not refused —
+please [open an issue](https://github.com/Qualflare/qualflare-cucumberjs/issues) if one
+misbehaves.
 
 ## Quickstart
 
@@ -32,15 +43,35 @@ Requires `@cucumber/cucumber` `>=10.8.0 <14` (installed separately as a peer dep
 }
 ```
 
-Set your token via the `QUALFLARE_TOKEN` environment variable (or the `token` format option):
+Then run your tests and upload the results — two steps, no token needed for the first:
 
 ```sh
-QUALFLARE_TOKEN=<your-token> npx cucumber-js
+# 1. Run. Writes ./qualflare-results (JSON + any videos). Zero network calls.
+npx cucumber-js
+
+# 2. Upload. `qf login <identifier> <token>` stores the credential once.
+qf <your-project-identifier> collect ./qualflare-results
 ```
 
-That's it — Feature/Scenario results, retries, and any screenshots you already attach upload as one
-Launch at the end of the run. See [`examples/basic/`](./examples/basic) for a complete runnable
-project.
+That's it — Feature/Scenario results, retries, and any screenshots you already attach arrive as one
+Launch. See [`examples/basic/`](./examples/basic) for a complete runnable project.
+
+### Sharded CI
+
+Point every shard at the **same** `outputDir` and collect once at the end. Each process writes its
+own uniquely-named file, so shards never overwrite each other, and `qf collect` merges every file
+in the directory into a single Launch:
+
+```sh
+# in each parallel job — note they all write to the same directory
+npx cucumber-js --shard "$SHARD_INDEX/$SHARD_TOTAL"
+
+# once, after all shards finish (e.g. with the directory restored from CI artifacts)
+qf <your-project-identifier> collect ./qualflare-results
+```
+
+No `--shard` flag is needed on the CLI side: merging is driven purely by which files are in the
+directory.
 
 ## Enriching your tests
 
@@ -77,10 +108,13 @@ provider/build/PR) in [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md).
 
 ## Known limitations
 
-- **One `cucumber-js` process uploads as one Launch by default** — sharded (`--shard`) CI setups get
-  multiple Launches unless you merge them via `outputFile` + `qualflare-cli --shard` (see
-  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md)); `--parallel` does not need this, since it runs
-  in-process worker threads.
+- **`outputDir` is merged blindly** — `qf collect` uploads every report file it finds, with no
+  run-identity check, so a directory left over from a previous run is silently merged into the
+  current one. Clear or freshly create `outputDir` at the start of each run.
+- **`shardIndex` is best-effort** — cucumber-js routes its own `--shard` flag somewhere a formatter
+  cannot read, so it is recovered from `QUALFLARE_SHARD_INDEX` or by scanning `process.argv`. It is
+  only an attribution label; merging never depends on it. See
+  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md).
 - **Doc Strings and Data Tables** have no dedicated wire field — encoded as a step `Parameter`
   (workaround, not a first-class rendering).
 - **`BeforeStep`/`AfterStep` hooks are off by default** (`includeStepHooks`) — noisy for suites with

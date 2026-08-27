@@ -35,8 +35,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Validates the peerDependencies.cucumber range (">=10.8.0 <14")
-        # empirically. Each leg's Node version matches what that cucumber-js
+        # Validates the peerDependencies.cucumber range (">=10.8.0")
+        # empirically. The range is open-ended, so this matrix can only ever
+        # prove the majors that existed when it was last touched — add a leg
+        # when cucumber-js ships a new major; the range itself needs no edit. Each leg's Node version matches what that cucumber-js
         # major actually requires (confirmed via `npm view @cucumber/cucumber
         # @<version> engines` for each): 10.8 -> Node 18||>=20, 11 -> Node
         # 18||20||>=22, 12/13 -> Node 20||22||>=24 and 22||24||>=26
@@ -57,8 +59,16 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
-      - name: Install matrix cucumber-js version
-        run: npm install --no-save "@cucumber/cucumber@${{ matrix.cucumber }}"
+      - name: Install with matrix cucumber-js version
+        # Deliberately a full, fresh resolution rather than `npm ci` followed
+        # by `npm install --no-save @cucumber/cucumber@X`. That incremental
+        # form trips npm's optional-dependency pruning bug (npm/cli#4828):
+        # re-resolving one package silently drops platform-specific binaries
+        # (@rollup/rollup-linux-x64-gnu, esbuild's) and the build then dies
+        # with a MODULE_NOT_FOUND pointing nowhere near the real cause.
+        run: |
+          npm pkg set devDependencies.@cucumber/cucumber="${{ matrix.cucumber }}"
+          rm -rf node_modules package-lock.json
+          npm install --no-audit --no-fund
       - run: npm run build
       - run: npm run test:integration

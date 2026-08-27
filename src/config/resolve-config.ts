@@ -8,7 +8,6 @@ import { detectGit, type GitInfo } from './git-detect.js';
  * `cucumber.json`). Every field here also has an environment-variable
  * override — see the precedence table in the README / plan. */
 export interface QualflareCucumberOptions {
-  apiEndpoint?: string;
   environment?: string;
   language?: string;
   milestone?: number | null;
@@ -25,12 +24,6 @@ export interface QualflareCucumberOptions {
   ciBuildNumber?: string;
   ciRunUrl?: string;
   ciPrNumber?: number;
-  timeoutMs?: number;
-  retry?: {
-    max?: number;
-    baseDelayMs?: number;
-    maxDelayMs?: number;
-  };
   attachScreenshots?: boolean;
   /** Include `BeforeStep`/`AfterStep` hook executions as synthetic steps.
    * Off by default — these run once per Gherkin step and can multiply the
@@ -70,7 +63,6 @@ export interface QualflareCucumberOptions {
 }
 
 export interface ResolvedFormatterConfig {
-  apiEndpoint: string;
   environment: string;
   language: string;
   milestone: number | null;
@@ -85,8 +77,6 @@ export interface ResolvedFormatterConfig {
   ciBuildNumber?: string;
   ciRunUrl?: string;
   ciPrNumber?: number;
-  timeoutMs: number;
-  retry: { max: number; baseDelayMs: number; maxDelayMs: number };
   attachScreenshots: boolean;
   includeStepHooks: boolean;
   maxAttachmentBytes: number;
@@ -217,7 +207,6 @@ export function resolveConfig(
   const ciPrNumber = options.ciPrNumber ?? detectedCi.ciPrNumber;
 
   return {
-    apiEndpoint: options.apiEndpoint ?? firstEnv('QUALFLARE_API_ENDPOINT') ?? 'https://api.qualflare.com',
     // `||` (truthy check), not `??`, for these three REQUIRED-non-empty wire
     // fields — an explicit `''` option must not silently win over the
     // default (the server rejects an empty `environment`). Ported verbatim from
@@ -236,12 +225,6 @@ export function resolveConfig(
     ciBuildNumber,
     ciRunUrl,
     ciPrNumber,
-    timeoutMs: options.timeoutMs ?? envInt('QUALFLARE_TIMEOUT_MS') ?? 120_000,
-    retry: {
-      max: options.retry?.max ?? envInt('QUALFLARE_RETRY_MAX', 'QF_RETRY_MAX') ?? 3,
-      baseDelayMs: options.retry?.baseDelayMs ?? envInt('QUALFLARE_RETRY_BASE_DELAY_MS') ?? 1000,
-      maxDelayMs: options.retry?.maxDelayMs ?? envInt('QUALFLARE_RETRY_MAX_DELAY_MS') ?? 30_000,
-    },
     attachScreenshots: options.attachScreenshots ?? envBool('QUALFLARE_ATTACH_SCREENSHOTS') ?? true,
     includeStepHooks: options.includeStepHooks ?? envBool('QUALFLARE_INCLUDE_STEP_HOOKS') ?? false,
     maxAttachmentBytes: options.maxAttachmentBytes ?? envInt('QUALFLARE_MAX_ATTACHMENT_BYTES') ?? 1_500_000,
