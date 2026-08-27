@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,31 +18,28 @@ const CONFIG = {
   attachScreenshots: true,
   maxAttachmentBytes: 1000,
   maxTotalAttachmentBytes: 2000,
-  uploadVideos: true,
   maxVideoBytes: 50_000_000,
-  httpOptions: {
-    endpoint: ENDPOINT,
-    token: 'test-token',
-    timeoutMs: 2000,
-    retry: { max: 0, baseDelayMs: 1, maxDelayMs: 5 }, // single attempt so a mocked failure resolves fast
-    userAgent: 'qualflare-cucumberjs-test',
-    debug: false,
-  },
+  outputDir: '',
 };
+
+let outputDir: string;
+
 
 let mockAgent: MockAgent;
 
 beforeEach(() => {
-  // A video-routed attachment makes a real HTTP call (requestUploadUrl) —
-  // disableNetConnect with no interceptors registered makes an unmocked
-  // attempt fail immediately (not hang/timeout), which resolveVideoAttachment
-  // then turns into a logged skip, same as any other upload failure.
+  // Video attachments are now pure filesystem work — no HTTP at all. The
+  // MockAgent stays only so any OTHER accidental network call in this file
+  // fails loudly and immediately rather than hanging.
+  outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qf-ab-out-'));
+  CONFIG.outputDir = outputDir;
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
 });
 
 afterEach(async () => {
+  fs.rmSync(outputDir, { recursive: true, force: true });
   await mockAgent.close();
   vi.restoreAllMocks();
 });
@@ -136,54 +137,53 @@ describe('resolveVideoAttachment', () => {
     expect(result).toBeUndefined();
   });
 
-  it('skips without attempting a network call when uploadVideos is disabled', async () => {
-    const result = await resolveVideoAttachment(
-      { name: 'clip', mimeType: 'video/mp4', content: 'abc' },
-      { ...CONFIG, uploadVideos: false },
-    );
-    expect(result).toBeUndefined();
-  });
-
   it('skips an unsupported video mimeType (no path to fall back on)', async () => {
     const result = await resolveVideoAttachment({ name: 'clip', mimeType: 'video/x-flv', content: 'abc' }, CONFIG);
     expect(result).toBeUndefined();
   });
 
-  it('skips in-memory content exceeding maxVideoBytes without attempting a network call', async () => {
+  it('skips in-memory content exceeding maxVideoBytes, writing nothing', async () => {
     const content = Buffer.alloc(101).toString('base64');
     const result = await resolveVideoAttachment(
       { name: 'clip', mimeType: 'video/mp4', content },
       { ...CONFIG, maxVideoBytes: 100 },
     );
     expect(result).toBeUndefined();
+    expect(fs.readdirSync(outputDir)).toHaveLength(0);
   });
 
-  it('is skipped (not thrown) when the presign request fails — no interceptor registered', async () => {
-    const content = Buffer.from('fake video bytes').toString('base64');
-    const result = await resolveVideoAttachment({ name: 'clip', mimeType: 'video/mp4', content }, CONFIG);
-    expect(result).toBeUndefined();
+  it('routes a file-based video attachment through writeVideoAttachment and sets localVideoPath', async () => {
+    const src = path.join(outputDir, 'source-clip.mp4');
+    fs.writeFileSync(src, 'video-bytes');
+
+    const resolved = await resolveVideoAttachment({ name: 'clip', path: src, mimeType: 'video/mp4' }, CONFIG);
+
+    expect(resolved?.localVideoPath).toBeDefined();
+    expect(resolved?.storageKey).toBeUndefined();
+    expect(resolved?.content).toBeUndefined();
+    expect(fs.readFileSync(path.join(outputDir, resolved!.localVideoPath!), 'utf8')).toBe('video-bytes');
   });
 
-  it('uploads in-memory video content end-to-end and returns storageKey/fileSize/mimeType', async () => {
-    const original = Buffer.from('fake video bytes');
+  it('routes an in-memory video attachment through writeVideoAttachment', async () => {
+    const original = Buffer.from('memory-bytes');
     const content = original.toString('base64');
 
-    const pool = mockAgent.get(ENDPOINT);
-    pool
-      .intercept({ path: '/api/v1/attachments/upload-url', method: 'POST' })
-      .reply(200, JSON.stringify({ storageKey: 'case-run-attachments/proj/clip.mp4', uploadUrl: `${ENDPOINT}/put-here` }), {
-        headers: { 'content-type': 'application/json' },
-      });
-    pool.intercept({ path: '/put-here', method: 'PUT' }).reply(200, '');
+    const resolved = await resolveVideoAttachment(
+      { name: 'clip', content, mimeType: 'video/mp4', stepIndex: 3 },
+      CONFIG,
+    );
 
-    const result = await resolveVideoAttachment({ name: 'clip', mimeType: 'video/mp4', content, stepIndex: 3 }, CONFIG);
+    expect(resolved?.localVideoPath).toBeDefined();
+    expect(resolved?.storageKey).toBeUndefined();
+    expect(resolved?.fileSize).toBe(original.length);
+    expect(resolved?.stepIndex).toBe(3);
+    expect(fs.readFileSync(path.join(outputDir, resolved!.localVideoPath!), 'utf8')).toBe('memory-bytes');
+  });
 
-    expect(result).toEqual({
-      name: 'clip',
-      mimeType: 'video/mp4',
-      storageKey: 'case-run-attachments/proj/clip.mp4',
-      fileSize: original.length,
-      stepIndex: 3,
-    });
+  it('makes zero network calls — the MockAgent has no interceptors and net is disabled', async () => {
+    const content = Buffer.from('fake video bytes').toString('base64');
+    // Would throw/reject if anything attempted a request.
+    const resolved = await resolveVideoAttachment({ name: 'clip', mimeType: 'video/mp4', content }, CONFIG);
+    expect(resolved?.localVideoPath).toBeDefined();
   });
 });
