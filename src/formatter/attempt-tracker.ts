@@ -55,14 +55,20 @@ interface AttemptRecord {
   properties: Record<string, string>;
   attachments: Attachment[];
   stepCapWarned: boolean;
-  /** In-flight video uploads (see `resolveVideoAttachment`) started during
-   * this attempt but not yet resolved. Each one, once settled, pushes its
-   * resulting `Attachment` onto `attachments` above (mutating the array in
-   * place — never reassigning it — so a reference already captured
-   * elsewhere still sees the push; see `finish()`'s doc comment for why this
-   * matters). `finish()` awaits every attempt's own queue before collapsing,
-   * so `attachments` is always complete by the time it's read. */
-  pendingVideoUploads: Promise<void>[];
+  /** Not-yet-settled video writes (see `resolveVideoAttachment`) started
+   * during this attempt. Each one, once settled, pushes its resulting
+   * `Attachment` onto `attachments` above (mutating the array in place —
+   * never reassigning it — so a reference already captured elsewhere still
+   * sees the push; see `finish()`'s doc comment for why this matters).
+   * `finish()` awaits every attempt's own queue before collapsing, so
+   * `attachments` is always complete by the time it's read.
+   *
+   * Still genuinely needed even though writing a video is now synchronous
+   * filesystem work rather than an upload: `resolveVideoAttachment` remains
+   * an `async` function, so the `.then()` that performs the push runs on a
+   * microtask, not inline. Dropping this queue would reintroduce exactly the
+   * bug `finish()` documents. */
+  pendingVideoWrites: Promise<void>[];
 }
 
 /**
@@ -103,7 +109,7 @@ export class AttemptTracker {
       properties: {},
       attachments: [],
       stepCapWarned: false,
-      pendingVideoUploads: [],
+      pendingVideoWrites: [],
     };
     this.byTestCaseStartedId.set(e.id, record);
     const attempts = this.byTestCaseId.get(testCase.id) ?? [];
@@ -206,19 +212,19 @@ export class AttemptTracker {
   }
 
   /** Resolves one pending attachment, routing a video-like one through the
-   * async upload flow (tracked in `record.pendingVideoUploads` so `finish()`
-   * can wait for it) and everything else through the synchronous inline
-   * path — shared by the real `World.attach()` handler above and both
+   * write-to-`outputDir` flow (tracked in `record.pendingVideoWrites` so
+   * `finish()` can wait for it) and everything else through the synchronous
+   * inline path — shared by the real `World.attach()` handler above and both
    * `qualflare.attachment()`/`attachmentFromFile()` runtime-message cases
    * below. */
   private resolveAttachment(record: AttemptRecord, pending: PendingAttachment): void {
     if (isVideoLike(pending.mimeType, pending.path)) {
-      const upload = resolveVideoAttachment(pending, this.config).then((resolved) => {
+      const write = resolveVideoAttachment(pending, this.config).then((resolved) => {
         if (resolved) {
           record.attachments.push(resolved);
         }
       });
-      record.pendingVideoUploads.push(upload);
+      record.pendingVideoWrites.push(write);
       return;
     }
     const resolved = resolvePendingAttachment(pending, this.config, this.attachmentBudget);
@@ -314,7 +320,7 @@ export class AttemptTracker {
    * (`willBeRetried === true`).
    *
    * Async because it must first await every attempt's own
-   * `pendingVideoUploads` (any video attached anywhere across every retry
+   * `pendingVideoWrites` (any video attached anywhere across every retry
    * of this scenario). This is load-bearing, not just tidiness:
    * `collapseAttempts`/`buildCase` read `attachments` by REFERENCE, not by
    * copy, and `buildCase` runs synchronously right after this resolves — a
@@ -339,9 +345,9 @@ export class AttemptTracker {
     const attempts = this.byTestCaseId.get(testCaseId) ?? [record];
     this.byTestCaseId.delete(testCaseId);
 
-    const pendingUploads = attempts.flatMap((a) => a.pendingVideoUploads);
-    if (pendingUploads.length > 0) {
-      await Promise.all(pendingUploads);
+    const pendingWrites = attempts.flatMap((a) => a.pendingVideoWrites);
+    if (pendingWrites.length > 0) {
+      await Promise.all(pendingWrites);
     }
 
     const snapshots: AttemptSnapshot[] = attempts.map((a) => {
