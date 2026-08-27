@@ -12,7 +12,6 @@ import {
   resolveVideoAttachment,
 } from '../../src/formatter/attachment-budget.js';
 
-const ENDPOINT = 'https://qualflare.test';
 
 const CONFIG = {
   attachScreenshots: true,

@@ -11,13 +11,6 @@
  * model mutation instead of rendering it as a literal attachment. */
 export const RESERVED_MESSAGE_MEDIA_TYPE = 'application/vnd.qualflare.message+json';
 
-/** HTTP headers used against `/api/v1/collect`. */
-export const HEADER_TOKEN = 'QF_TOKEN';
-export const HEADER_IDEMPOTENCY_KEY = 'Idempotency-Key';
-export const HEADER_CONTENT_TYPE = 'Content-Type';
-export const HEADER_ACCEPT = 'Accept';
-export const HEADER_USER_AGENT = 'User-Agent';
-
 /** Server-side caps this client should respect defensively (see
  * `api-service/internal/core/domain/launch/launch.go`). */
 export const MAX_SUITES_PER_LAUNCH = 2000;
@@ -29,7 +22,6 @@ export const MAX_LABELS_PER_CASE = 100;
 export const MAX_LINKS_PER_CASE = 20;
 export const MAX_TAGS_PER_CASE = 64;
 export const MAX_TAG_LENGTH = 255;
-export const MAX_IDEMPOTENCY_KEY_CHARS = 255;
 
 /** Mirrors `launch.MaxAttachmentUploadFileSize` — the server's hard cap on a
  * single `POST /api/v1/attachments/upload-url` request (video). */
