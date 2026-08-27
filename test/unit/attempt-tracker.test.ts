@@ -11,7 +11,6 @@ import { AttemptTracker } from '../../src/formatter/attempt-tracker.js';
 import { GherkinIndex } from '../../src/formatter/gherkin-index.js';
 import { buildHookIndexFromRaw } from './support/fake-hook-index.js';
 
-const ENDPOINT = 'https://qualflare.test';
 
 const CONFIG = {
   includeStepHooks: false,

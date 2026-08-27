@@ -57,8 +57,7 @@
   },
   "dependencies": {
     "@cucumber/messages": "^34.0.0",
-    "ci-info": "^4.0.0",
-    "undici": "^6.19.8"
+    "ci-info": "^4.0.0"
   },
   "devDependencies": {
     "@cucumber/cucumber": "^13.2.1",
@@ -69,6 +68,7 @@
     "tsup": "^8.2.4",
     "typescript": "^5.6.2",
     "typescript-eslint": "^8.5.0",
+    "undici": "^6.19.8",
     "vitest": "^2.0.5"
   },
   "scripts": {
