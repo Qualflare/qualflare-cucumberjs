@@ -22,7 +22,11 @@ const fixtureDir = path.join(__dirname, 'fixtures', 'cucumber-project');
  * TypeScript source.
  */
 describe('qualflare-cucumberjs against a real cucumber-js run', () => {
+  // The mock server is kept ONLY as a tripwire: this formatter must make
+  // zero requests now, so a server that captures anything at all is a
+  // regression. It is deliberately NOT the source of the payload any more.
   let server: MockCollectServer;
+  let outputDir: string;
 
   beforeAll(async () => {
     server = await startMockCollectServer();
@@ -32,52 +36,61 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
     await server.close();
   });
 
+  beforeEach(() => {
+    outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qualflare-cucumberjs-output-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
   it(
-    'uploads one Collect payload matching the wire contract, retrying through a forced 503 first',
+    'writes one Collect report into outputDir matching the wire contract, making zero requests',
     async () => {
-      // Exercises the retry path and the final payload shape in the same
-      // run: the queued 503 forces the formatter's http client to retry
-      // once, so we expect exactly 2 requests here, both carrying the SAME
-      // Idempotency-Key (proving the key is stable across retries, not
-      // regenerated), with the second succeeding.
-      server.queueStatus(503);
+      const requestCountBefore = server.requests.length;
+      const uploadCountBefore = server.uploads.length;
+
+      // Deliberately NO token of any kind — this formatter never
+      // authenticates, so resolveConfig must not demand one. Explicitly
+      // deleted (not set to `undefined`) so this doesn't depend on
+      // execa/child_process's undefined-env-value handling.
+      const env = {
+        ...process.env,
+        QUALFLARE_API_ENDPOINT: server.url,
+        QUALFLARE_OUTPUT_DIR: outputDir,
+      };
+      delete env.QUALFLARE_TOKEN;
+      delete env.QF_TOKEN;
 
       const result = await execa('npx', ['cucumber-js'], {
         cwd: fixtureDir,
-        env: {
-          ...process.env,
-          QUALFLARE_TOKEN: 'test-token',
-          QUALFLARE_API_ENDPOINT: server.url,
-        },
+        env,
         // Several fixture scenarios fail by design (failing.feature,
         // hook-failure.feature, the first attempt of retried-flaky.feature)
-        // — assert on the captured payload, not cucumber-js's exit code.
+        // — assert on the written payload, not cucumber-js's exit code.
         reject: false,
       });
 
-      if (server.requests.length === 0) {
+      const reports = fs.readdirSync(outputDir).filter((f) => f.endsWith('.json'));
+      if (reports.length === 0) {
         throw new Error(
-          `cucumber-js run produced no captured requests at all — it likely failed to even start. ` +
+          `cucumber-js run produced no report in ${outputDir} — it likely failed to even start. ` +
             `exit code: ${result.exitCode}\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
         );
       }
+      // Exactly one report per process, no matter how many scenarios ran.
+      expect(reports).toHaveLength(1);
 
-      expect(server.requests).toHaveLength(2);
-      const [first, second] = server.requests;
+      // The tripwire: this formatter constructs no HTTP client at all, so
+      // neither /collect nor the old presign+PUT flow may be touched.
+      // Checking uploads specifically (not just requests, which only counts
+      // /collect) is the point — an earlier version of this suite checked
+      // only requests and passed while videos were still being uploaded.
+      expect(server.requests.length).toBe(requestCountBefore);
+      expect(server.uploads.length).toBe(uploadCountBefore);
 
-      const firstKey = first!.headers['idempotency-key'];
-      const secondKey = second!.headers['idempotency-key'];
-      expect(firstKey).toBeTypeOf('string');
-      expect(firstKey).toMatch(/^[0-9a-f-]{36}$/i);
-      expect(secondKey).toBe(firstKey);
-
-      for (const req of server.requests) {
-        expect(req.headers['qf_token']).toBe('test-token');
-        expect(req.headers['content-type']).toMatch(/^application\/json/);
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the captured body is untyped JSON from the wire, asserted field-by-field below
-      const collect = second!.body as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON read back from disk, asserted field-by-field below
+      const collect = JSON.parse(fs.readFileSync(path.join(outputDir, reports[0]!), 'utf8')) as any;
 
       expect(collect.framework).toBe('cucumber');
       expect(collect.platform).toBe('web');
@@ -181,25 +194,24 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
       );
 
       // A real qualflare.attachment() call with video content — must have
-      // gone through the presigned-upload-URL flow (storageKey, no inline
-      // content), not the inline-base64 path every other attachment above
-      // takes.
+      // been written into outputDir and referenced by localVideoPath, not
+      // inlined as base64 and not uploaded.
       const videoCase = allCases.find((c) => c.name === 'attaches a video via qualflare.attachment()');
       expect(videoCase).toBeDefined();
       expect(videoCase.attachments).toHaveLength(1);
       const videoAttachment = videoCase.attachments[0];
       expect(videoAttachment.mimeType).toBe('video/mp4');
       expect(videoAttachment.content).toBeUndefined();
-      expect(typeof videoAttachment.storageKey).toBe('string');
-      expect(videoAttachment.storageKey.length).toBeGreaterThan(0);
+      expect(videoAttachment.storageKey).toBeUndefined();
+      expect(typeof videoAttachment.localVideoPath).toBe('string');
 
-      // The server actually received a presign request AND the PUT — not
-      // just a storageKey the client invented without uploading anything.
-      expect(server.uploads).toHaveLength(1);
-      const upload = server.uploads[0]!;
-      expect(upload.storageKey).toBe(videoAttachment.storageKey);
-      expect(upload.contentType).toBe('video/mp4');
-      expect(upload.body.toString('utf8')).toBe('qualflare-cucumberjs-integration-test-fake-video-bytes');
+      // The referenced file really exists next to the report, with the
+      // exact bytes the fixture attached — localVideoPath is a promise
+      // qualflare-cli has to be able to keep at collect time.
+      const videoPath = path.join(outputDir, videoAttachment.localVideoPath);
+      expect(fs.existsSync(videoPath)).toBe(true);
+      expect(fs.readFileSync(videoPath, 'utf8')).toBe('qualflare-cucumberjs-integration-test-fake-video-bytes');
+      expect(videoAttachment.fileSize).toBe(fs.statSync(videoPath).size);
 
       // Every OTHER attachment in this run still takes the inline path —
       // the video-routing change didn't leak into non-video attachments.
@@ -210,85 +222,11 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
         for (const att of c.attachments ?? []) {
           expect(att.mimeType).not.toMatch(/^video\//);
           expect(att.storageKey).toBeUndefined();
+          expect(att.localVideoPath).toBeUndefined();
         }
       }
     },
     120_000,
   );
 
-  describe('outputFile mode (sharded-CI file-output path)', () => {
-    let tmpDir: string;
-
-    beforeEach(() => {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qualflare-cucumberjs-output-file-test-'));
-    });
-
-    afterEach(() => {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    });
-
-    it(
-      'writes the Collect JSON to disk instead of uploading, and makes zero requests to the server',
-      async () => {
-        const outputFile = path.join(tmpDir, 'shard-0.json');
-        const requestCountBefore = server.requests.length;
-        const uploadCountBefore = server.uploads.length;
-
-        // Deliberately NO QUALFLARE_TOKEN — outputFile mode never
-        // authenticates, so resolveConfig must not throw its usual
-        // no-token error here (see resolve-config-output-file.test.ts for
-        // the unit-level version of this same assertion). Explicitly
-        // deleted (not set to `undefined`) so this doesn't depend on
-        // execa/child_process's undefined-env-value handling.
-        const env = { ...process.env, QUALFLARE_API_ENDPOINT: server.url, QUALFLARE_OUTPUT_FILE: outputFile };
-        delete env.QUALFLARE_TOKEN;
-        delete env.QF_TOKEN;
-
-        const result = await execa('npx', ['cucumber-js'], {
-          cwd: fixtureDir,
-          env,
-          reject: false,
-        });
-
-        if (!fs.existsSync(outputFile)) {
-          throw new Error(
-            `cucumber-js run did not produce ${outputFile}. exit code: ${result.exitCode}\n` +
-              `--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
-          );
-        }
-
-        // The mock server received nothing from this run — file mode never
-        // constructs an HTTP client at all.
-        expect(server.requests.length).toBe(requestCountBefore);
-
-        // Regression check for a real bug found in self-review: this
-        // fixture project's video-attachment.feature scenario (a real
-        // qualflare.attachment() call with video content) previously still
-        // triggered a presign+PUT attempt even in outputFile mode, since
-        // uploadVideos defaulted true and nothing gated the video-upload
-        // path on outputFile. Checking server.uploads specifically (not
-        // just server.requests, which only counts /collect) is the point —
-        // the original bug shipped a test that only checked requests and
-        // passed anyway.
-        expect(server.uploads.length).toBe(uploadCountBefore);
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON read back from disk, asserted field-by-field below
-        const collect = JSON.parse(fs.readFileSync(outputFile, 'utf8')) as any;
-        expect(collect.framework).toBe('cucumber');
-        expect(Array.isArray(collect.suites)).toBe(true);
-        expect(collect.suites.length).toBeGreaterThan(0);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const allCases = collect.suites.flatMap((s: any) => s.cases as any[]);
-        expect(allCases.some((c) => c.name === 'passes normally')).toBe(true);
-
-        // The video-attachment scenario's attachment was skipped entirely
-        // (not uploaded, not inlined) — mirrors uploadVideos: false's
-        // existing behavior.
-        const videoCase = allCases.find((c) => c.name === 'attaches a video via qualflare.attachment()');
-        expect(videoCase).toBeDefined();
-        expect(videoCase.attachments ?? []).toHaveLength(0);
-      },
-      120_000,
-    );
-  });
 });

@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import { Formatter, type IFormatterOptions } from '@cucumber/cucumber';
 import type { Envelope, GherkinDocument, Pickle, TestCase } from '@cucumber/messages';
 
 import { resolveConfig, type QualflareCucumberOptions, type ResolvedFormatterConfig } from '../config/resolve-config.js';
-import { QualflareHttpClient } from '../http/client.js';
 import { logger } from '../shared/logger.js';
 import { AttachmentBudget } from './attachment-budget.js';
 import { AttemptTracker } from './attempt-tracker.js';
@@ -14,7 +15,6 @@ import { GherkinIndex } from './gherkin-index.js';
 import { buildHookIndex, type HookIndex } from './hook-index.js';
 import { RunHookTracker } from './run-hook-tracker.js';
 import { groupIntoSuites } from './suite-builder.js';
-import { buildHttpOptions } from './video-uploader.js';
 
 export default class QualflareCucumberFormatter extends Formatter {
   private readonly config: ResolvedFormatterConfig;
@@ -46,7 +46,7 @@ export default class QualflareCucumberFormatter extends Formatter {
     this.attemptTracker = new AttemptTracker(
       this.hookIndex,
       this.gherkin,
-      { ...this.config, httpOptions: buildHttpOptions(this.config) },
+      this.config,
       this.attachmentBudget,
     );
 
@@ -152,53 +152,44 @@ export default class QualflareCucumberFormatter extends Formatter {
   async finished(): Promise<void> {
     try {
       // Every scenario's Case must be fully built (attachments included,
-      // any pending video upload settled) before the Collect payload is
+      // any pending video write settled) before the Collect payload is
       // assembled — see the testCaseFinished dispatch branch above.
       await Promise.all(this.pendingCaseBuilds);
       if (this.config.enabled) {
-        await this.uploadResults();
+        this.writeResults();
       }
     } finally {
       await super.finished();
     }
   }
 
-  private async uploadResults(): Promise<void> {
+  /** Writes this process's Collect payload into `outputDir` under a unique
+   * filename. Never uploads: `qualflare-cli collect <outputDir>` does that,
+   * merging every file it finds there into one Launch. Multiple shards can
+   * therefore share one directory safely — the UUID filename is what keeps
+   * them from overwriting each other. */
+  private writeResults(): void {
     const suites = groupIntoSuites(this.finishedCases, this.cwd, this.runHookTracker.buildSuite());
     if (suites.length === 0) {
       if (this.config.debug) {
-        logger.debug(`no scenarios reported — skipping ${this.config.outputFile ? 'file write' : 'upload'}.`);
+        logger.debug('no scenarios reported — skipping file write.');
       }
       return;
     }
     const payload = buildCollectPayload(suites, this.config);
-
-    // Sharded CI: write this process's own Collect JSON to disk instead of
-    // POSTing it. A separate aggregation step (after all shards' files are
-    // collected, e.g. via CI artifact download) merges them into one launch
-    // via `qualflare-cli upload --shard <files...>` — see docs/LIMITATIONS.md.
-    // No HTTP client is ever constructed in this mode; resolveConfig already
-    // skipped the token-required check for the same reason.
-    if (this.config.outputFile) {
-      fs.writeFileSync(this.config.outputFile, JSON.stringify(payload));
-      logger.info(
-        `wrote Collect payload to ${this.config.outputFile} — not uploaded (outputFile mode). ` +
-          'Merge shard files and upload once via `qualflare-cli upload --shard <files...>`.',
-      );
-      return;
+    if (this.config.shardIndex !== undefined) {
+      for (const suite of payload.suites) {
+        for (const c of suite.cases) {
+          c.shardIndex = this.config.shardIndex;
+        }
+      }
     }
 
-    const client = new QualflareHttpClient(buildHttpOptions(this.config));
-    try {
-      const result = await client.send(payload);
-      if (this.config.debug) {
-        logger.debug(`uploaded launch #${result.seq}.`);
-      }
-    } catch (err) {
-      if (this.config.failOnUploadError) {
-        throw err;
-      }
-      logger.error('failed to upload results to Qualflare:', err);
-    }
+    fs.mkdirSync(this.config.outputDir, { recursive: true });
+    const outputPath = path.join(this.config.outputDir, `${randomUUID()}.json`);
+    fs.writeFileSync(outputPath, JSON.stringify(payload));
+    logger.info(
+      `wrote Collect payload to ${outputPath} — run \`qualflare-cli collect ${this.config.outputDir}\` to upload it.`,
+    );
   }
 }
