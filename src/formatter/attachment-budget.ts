@@ -1,10 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { SendOptions } from '../http/client.js';
 import { logger } from '../shared/logger.js';
 import type { Attachment } from '../shared/types.js';
-import { resolveVideoMimeType, uploadVideoBytes, readVideoFile } from './video-uploader.js';
+import { resolveVideoMimeType, writeVideoAttachment } from './video-uploader.js';
 
 /** Extensions/mime-prefixes routed through the video-upload flow
  * (`resolveVideoAttachment`) instead of the inline-base64 path below.
@@ -19,9 +18,8 @@ export interface AttachmentBudgetConfig {
   attachScreenshots: boolean;
   maxAttachmentBytes: number;
   maxTotalAttachmentBytes: number;
-  uploadVideos: boolean;
   maxVideoBytes: number;
-  httpOptions: SendOptions;
+  outputDir: string;
 }
 
 /** One `World.attach()` call (real user attachment, or `qualflare.attachment
@@ -173,52 +171,23 @@ export function resolvePendingAttachment(
  * `pendingVideoUploads` for how callers reconcile that with cucumber-js's
  * synchronous, per-envelope event stream.
  */
-export async function resolveVideoAttachment(pending: PendingAttachment, config: AttachmentBudgetConfig): Promise<Attachment | undefined> {
+export async function resolveVideoAttachment(
+  pending: PendingAttachment,
+  config: AttachmentBudgetConfig,
+): Promise<Attachment | undefined> {
   if (!config.attachScreenshots) {
     return undefined;
   }
-  if (!config.uploadVideos) {
-    logger.info(`skipping video attachment "${pending.name}": uploadVideos is disabled.`);
-    return undefined;
-  }
-  const resolved = resolveVideoMimeType(pending.mimeType, pending.path);
-  if (!resolved) {
-    logger.warn(`skipping video attachment "${pending.name}": unsupported video format.`);
-    return undefined;
-  }
-
-  let body: Buffer;
-  if (pending.content !== undefined) {
-    const bytes = Buffer.byteLength(pending.content, 'base64');
-    if (bytes > config.maxVideoBytes) {
-      logger.warn(
-        `skipping video attachment "${pending.name}": ${bytes} bytes exceeds the configured maxVideoBytes cap of ${config.maxVideoBytes} bytes.`,
-      );
-      return undefined;
-    }
-    body = Buffer.from(pending.content, 'base64');
-  } else if (pending.path) {
-    const read = readVideoFile(pending.path, config.maxVideoBytes);
-    if (!read) {
-      // readVideoFile already logged why.
-      return undefined;
-    }
-    body = read;
-  } else {
-    return undefined;
-  }
-
-  const filename = pending.path ? path.basename(pending.path) : `${pending.name}${resolved.extension}`;
-  const uploaded = await uploadVideoBytes(body, filename, resolved.mimeType, config.httpOptions);
-  if (!uploaded) {
-    // uploadVideoBytes already logged why.
+  const written = writeVideoAttachment(pending, config.outputDir, config.maxVideoBytes);
+  if (!written) {
+    // writeVideoAttachment already logged why.
     return undefined;
   }
   return {
     name: pending.name,
-    mimeType: resolved.mimeType,
-    storageKey: uploaded.storageKey,
-    fileSize: uploaded.fileSize,
+    mimeType: written.mimeType,
+    localVideoPath: written.localVideoPath,
+    fileSize: written.fileSize,
     stepIndex: pending.stepIndex,
   };
 }
