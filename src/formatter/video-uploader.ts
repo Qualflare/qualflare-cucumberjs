@@ -1,25 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { PACKAGE_VERSION } from '../config/version.js';
-import type { ResolvedFormatterConfig } from '../config/resolve-config.js';
-import { putObject, requestUploadUrl, type SendOptions } from '../http/client.js';
 import { logger } from '../shared/logger.js';
 
-/** Builds the `SendOptions` shared by every HTTP call this reporter makes
- * (the final `/collect` POST and the video presign request) from the
- * resolved formatter config. Centralized so the `userAgent` string is
- * constructed exactly once. */
-export function buildHttpOptions(config: ResolvedFormatterConfig): SendOptions {
-  return {
-    endpoint: config.apiEndpoint,
-    token: config.token,
-    timeoutMs: config.timeoutMs,
-    retry: config.retry,
-    userAgent: `qualflare-cucumberjs/${PACKAGE_VERSION}`,
-    debug: config.debug,
-  };
-}
 
 /** Extension <-> MIME type for the video formats the server accepts (see
  * `launch.AllowedAttachmentUploadMimeTypes` server-side). */
@@ -60,76 +44,84 @@ export function resolveVideoMimeType(mimeType: string | undefined, filePath: str
   return normalized && extension ? { mimeType: normalized, extension } : undefined;
 }
 
-export interface VideoUploadResult {
-  storageKey: string;
+export interface VideoWriteResult {
+  /** Filename relative to the `outputDir` this was written into. */
+  localVideoPath: string;
   fileSize: number;
+  mimeType: string;
 }
 
 /**
- * Uploads one video's bytes to R2 via the presigned-upload-URL flow
- * (`POST /api/v1/attachments/upload-url` -> PUT bytes -> return the
- * `storageKey` a later `/collect` payload references — see
- * `Attachment.storageKey`'s doc comment in shared/types.ts).
+ * Writes one pending video attachment's bytes into `outputDir` under a
+ * unique filename — copying (`fs.copyFileSync`) when it names a real local
+ * file, or decoding+writing when it's in-memory base64 content (the
+ * `World.attach()`/`qualflare.attachment()` path, which has no file to
+ * copy). Unlike qualflare-cypress, where a video is always a file Cypress
+ * recorded, this formatter has to handle both — cucumber-js has no
+ * "one recorded file per run" concept.
  *
- * Best-effort, like the rest of this reporter's attachment handling
- * (`attachment-budget.ts`'s oversized/unreadable-file skip): any failure —
- * network/API error — is logged as a warning and resolves to `undefined`
- * rather than throwing, so a video upload problem never fails the whole run
- * (independent of `failOnUploadError`, which is scoped to the actual
- * `/collect` POST, not to best-effort attachment resolution). Size/format
- * validation happens in the caller (`attachment-budget.ts`), before this is
- * invoked — this function only performs the upload itself.
+ * `qualflare-cli` uploads whatever lands here later, once it has a real
+ * auth token; this process never makes a network call.
+ *
+ * Best-effort: any failure (unsupported format, oversized, unreadable
+ * source, write failure) is logged as a warning and returns `undefined`
+ * rather than throwing — a video is never worth failing a test run over.
  */
-export async function uploadVideoBytes(
-  body: Buffer,
-  filename: string,
-  mimeType: string,
-  httpOptions: SendOptions,
-): Promise<VideoUploadResult | undefined> {
-  let uploadUrl: string;
-  let storageKey: string;
-  try {
-    const res = await requestUploadUrl(httpOptions, filename, mimeType, body.length);
-    uploadUrl = res.uploadUrl;
-    storageKey = res.storageKey;
-  } catch (err) {
-    logger.warn(`skipping video upload for "${filename}": failed to obtain an upload URL: ${(err as Error).message}`);
+export function writeVideoAttachment(
+  pending: { name: string; mimeType?: string; path?: string; content?: string },
+  outputDir: string,
+  maxVideoBytes: number,
+): VideoWriteResult | undefined {
+  const resolved = resolveVideoMimeType(pending.mimeType, pending.path);
+  if (!resolved) {
+    logger.warn(`skipping video attachment "${pending.name}": unsupported video format.`);
     return undefined;
   }
 
-  try {
-    await putObject(uploadUrl, body, mimeType, httpOptions.timeoutMs);
-  } catch (err) {
-    logger.warn(`skipping video upload for "${filename}": upload failed: ${(err as Error).message}`);
-    return undefined;
+  const localVideoPath = `${randomUUID()}${resolved.extension}`;
+  const destination = path.join(outputDir, localVideoPath);
+
+  if (pending.path !== undefined) {
+    let fileSize: number;
+    try {
+      fileSize = fs.statSync(pending.path).size;
+    } catch (err) {
+      logger.warn(`skipping video attachment "${pending.path}": could not stat file: ${(err as Error).message}`);
+      return undefined;
+    }
+    if (fileSize > maxVideoBytes) {
+      logger.warn(
+        `skipping video attachment "${pending.path}": ${fileSize} bytes exceeds the configured maxVideoBytes cap of ${maxVideoBytes} bytes.`,
+      );
+      return undefined;
+    }
+    try {
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.copyFileSync(pending.path, destination);
+    } catch (err) {
+      logger.warn(`skipping video attachment "${pending.path}": could not copy file: ${(err as Error).message}`);
+      return undefined;
+    }
+    return { localVideoPath, fileSize, mimeType: resolved.mimeType };
   }
 
-  return { storageKey, fileSize: body.length };
-}
+  if (pending.content !== undefined) {
+    const fileSize = Buffer.byteLength(pending.content, 'base64');
+    if (fileSize > maxVideoBytes) {
+      logger.warn(
+        `skipping video attachment "${pending.name}": ${fileSize} bytes exceeds the configured maxVideoBytes cap of ${maxVideoBytes} bytes.`,
+      );
+      return undefined;
+    }
+    try {
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.writeFileSync(destination, Buffer.from(pending.content, 'base64'));
+    } catch (err) {
+      logger.warn(`skipping video attachment "${pending.name}": could not write file: ${(err as Error).message}`);
+      return undefined;
+    }
+    return { localVideoPath, fileSize, mimeType: resolved.mimeType };
+  }
 
-/** Reads a local video file into memory, honoring `maxVideoBytes` via
- * `fs.statSync` BEFORE reading — an oversized file must never be loaded
- * just to discover it should be skipped (same discipline as
- * `attachment-budget.ts`'s `readAttachmentFile`). Returns `undefined` (and
- * logs why) on any failure. */
-export function readVideoFile(filePath: string, maxVideoBytes: number): Buffer | undefined {
-  let size: number;
-  try {
-    size = fs.statSync(filePath).size;
-  } catch (err) {
-    logger.warn(`skipping video attachment "${filePath}": could not stat file: ${(err as Error).message}`);
-    return undefined;
-  }
-  if (size > maxVideoBytes) {
-    logger.warn(
-      `skipping video attachment "${filePath}": ${size} bytes exceeds the configured maxVideoBytes cap of ${maxVideoBytes} bytes.`,
-    );
-    return undefined;
-  }
-  try {
-    return fs.readFileSync(filePath);
-  } catch (err) {
-    logger.warn(`skipping video attachment "${filePath}": could not read file: ${(err as Error).message}`);
-    return undefined;
-  }
+  return undefined;
 }
