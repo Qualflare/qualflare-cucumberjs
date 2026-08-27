@@ -168,7 +168,7 @@ export function resolvePendingAttachment(
  * be skipped (uploads disabled, unsupported format, oversized, or a
  * network/API error; each case logs why). Async, unlike
  * `resolvePendingAttachment` — see `attempt-tracker.ts`'s
- * `pendingVideoUploads` for how callers reconcile that with cucumber-js's
+ * `pendingVideoWrites` for how callers reconcile that with cucumber-js's
  * synchronous, per-envelope event stream.
  */
 export async function resolveVideoAttachment(

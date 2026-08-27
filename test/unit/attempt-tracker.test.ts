@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
 import { AttachmentContentEncoding, TestStepResultStatus } from '@cucumber/messages';
 import { MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,27 +18,25 @@ const CONFIG = {
   attachScreenshots: true,
   maxAttachmentBytes: 1_500_000,
   maxTotalAttachmentBytes: 750_000,
-  uploadVideos: true,
   maxVideoBytes: 50_000_000,
-  httpOptions: {
-    endpoint: ENDPOINT,
-    token: 'test-token',
-    timeoutMs: 2000,
-    retry: { max: 0, baseDelayMs: 1, maxDelayMs: 5 },
-    userAgent: 'qualflare-cucumberjs-test',
-    debug: false,
-  },
+  outputDir: '',
 };
+
+let outputDir: string;
+
 
 let mockAgent: MockAgent;
 
 beforeEach(() => {
+  outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qf-at-out-'));
+  CONFIG.outputDir = outputDir;
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
 });
 
 afterEach(async () => {
+  fs.rmSync(outputDir, { recursive: true, force: true });
   await mockAgent.close();
   vi.restoreAllMocks();
 });
@@ -236,26 +238,22 @@ describe('AttemptTracker', () => {
     expect(finished.collapsed.attachments[0]).toMatchObject({ name: 'note.txt', mimeType: 'text/plain', stepIndex: 0 });
   });
 
-  it('waits for a pending video upload before collapsing, so a video-only attachment is never lost', async () => {
+  it('waits for a pending video write before collapsing, so a video-only attachment is never lost', async () => {
     // Regression test for a real bug found in self-review: collapseAttempts/
     // buildCase read `attachments` BY REFERENCE and run synchronously right
-    // after finish() resolves. If finish() didn't await the video's still-
-    // in-flight upload here, buildCase would see an EMPTY attachments array
-    // at that instant and capture a bare `undefined` for a scenario whose
-    // ONLY attachment is this video — a later push onto the (still-live)
-    // array would then be invisible, since `undefined` is a value, not a
-    // reference to the array.
+    // after finish() resolves. If finish() didn't await the video's not-yet-
+    // settled write here, buildCase would see an EMPTY attachments array at
+    // that instant and capture a bare `undefined` for a scenario whose ONLY
+    // attachment is this video — a later push onto the (still-live) array
+    // would then be invisible, since `undefined` is a value, not a reference
+    // to the array.
+    //
+    // Still a live hazard now that videos are written rather than uploaded:
+    // resolveVideoAttachment is still an `async` function, so the `.then()`
+    // that pushes onto `attachments` runs on a microtask, not inline.
     const { tracker } = makeTracker();
     const tc = testCase([{ id: 'ts-1', pickleStepId: 'step-1' }]);
     const p = pickle();
-
-    const pool = mockAgent.get(ENDPOINT);
-    pool
-      .intercept({ path: '/api/v1/attachments/upload-url', method: 'POST' })
-      .reply(200, JSON.stringify({ storageKey: 'case-run-attachments/proj/clip.mp4', uploadUrl: `${ENDPOINT}/put-here` }), {
-        headers: { 'content-type': 'application/json' },
-      });
-    pool.intercept({ path: '/put-here', method: 'PUT' }).reply(200, '');
 
     tracker.begin({ id: 'tcs-1', testCaseId: tc.id, attempt: 0, timestamp: timestamp() }, tc, p);
     tracker.stepStarted({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', timestamp: timestamp() });
@@ -268,7 +266,7 @@ describe('AttemptTracker', () => {
       testStepId: 'ts-1',
     });
     tracker.stepFinished({ testCaseStartedId: 'tcs-1', testStepId: 'ts-1', testStepResult: passedResult(), timestamp: timestamp() });
-    // finish() is called immediately, WITHOUT waiting for the upload to
+    // finish() is called immediately, WITHOUT waiting for the write to
     // settle first — its own internal await is what must make this correct.
     const finished = await tracker.finish({ testCaseStartedId: 'tcs-1', timestamp: timestamp(), willBeRetried: false })!;
 
@@ -276,7 +274,11 @@ describe('AttemptTracker', () => {
     expect(finished.collapsed.attachments[0]).toMatchObject({
       name: 'clip.mp4',
       mimeType: 'video/mp4',
-      storageKey: 'case-run-attachments/proj/clip.mp4',
     });
+    expect(finished.collapsed.attachments[0]!.localVideoPath).toBeDefined();
+    expect(fs.readFileSync(path.join(outputDir, finished.collapsed.attachments[0]!.localVideoPath!), 'utf8')).toBe(
+      'fake video bytes',
+    );
   });
+
 });
