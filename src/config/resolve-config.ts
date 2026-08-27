@@ -8,7 +8,6 @@ import { detectGit, type GitInfo } from './git-detect.js';
  * `cucumber.json`). Every field here also has an environment-variable
  * override — see the precedence table in the README / plan. */
 export interface QualflareCucumberOptions {
-  token?: string;
   apiEndpoint?: string;
   environment?: string;
   language?: string;
@@ -32,7 +31,6 @@ export interface QualflareCucumberOptions {
     baseDelayMs?: number;
     maxDelayMs?: number;
   };
-  failOnUploadError?: boolean;
   attachScreenshots?: boolean;
   /** Include `BeforeStep`/`AfterStep` hook executions as synthetic steps.
    * Off by default — these run once per Gherkin step and can multiply the
@@ -42,30 +40,36 @@ export interface QualflareCucumberOptions {
   includeStepHooks?: boolean;
   maxAttachmentBytes?: number;
   maxTotalAttachmentBytes?: number;
-  /** Upload a video attachment (`World.attach()`/`qualflare.attachment()`/
-   * `attachmentFromFile()` given video content or a video file path) via a
-   * separate presigned-URL flow instead of dropping it. Default `true`. */
-  uploadVideos?: boolean;
-  /** Per-video byte cap, checked before upload. Default 50MB, matching the
-   * server's own hard cap. */
+  /** Per-video byte cap, checked before the file is written. Default 50MB,
+   * matching the server's own hard cap. */
   maxVideoBytes?: number;
   debug?: boolean;
   /** `false` fully disables accumulation/upload (a complete no-op) but the
    * formatter still no-ops cleanly rather than throwing. */
   enabled?: boolean;
-  /** When set, `finished()` writes the built `Collect` JSON to this path
-   * instead of POSTing it — no HTTP client is constructed, no `token` is
-   * required (see `resolveConfig`'s token check below). For CI setups that
-   * shard a run across multiple independent `cucumber-js --shard` processes
-   * (each one an independent Launch otherwise — see docs/LIMITATIONS.md):
-   * give each shard's job a unique path here, upload the file as a CI
-   * artifact, then merge + upload all shards once via `qualflare-cli upload
-   * --shard <files...>`. */
-  outputFile?: string;
+  /** Directory `finished()` writes this process's report file (and any
+   * video attachments) into. Default `./qualflare-results`. Always active —
+   * this formatter never uploads anything itself; `qualflare-cli` reads
+   * whatever ends up in this directory. Every JSON file this process writes
+   * is uniquely named, so multiple shards can safely share one `outputDir`
+   * without colliding — see docs/LIMITATIONS.md. */
+  outputDir?: string;
+  /** This process's 0-based position among parallel shards of the same CI
+   * run, stamped onto every case it reports. Purely a label: `qualflare-cli`
+   * merges by "every file in the directory", not by this value, so an
+   * unset shardIndex costs attribution, never correctness.
+   *
+   * Auto-detected, in order: `QUALFLARE_SHARD_INDEX`, then a best-effort
+   * scan of `process.argv` for cucumber-js's own `--shard INDEX/TOTAL`
+   * (whose index is 1-based, so it is converted). cucumber-js routes that
+   * flag to `configuration.sources.shard`, and a formatter is only ever
+   * handed `configuration.options` — so argv is the only place a formatter
+   * can observe it, and only when it was passed on the command line rather
+   * than via a config file. */
+  shardIndex?: number;
 }
 
 export interface ResolvedFormatterConfig {
-  token: string;
   apiEndpoint: string;
   environment: string;
   language: string;
@@ -83,16 +87,15 @@ export interface ResolvedFormatterConfig {
   ciPrNumber?: number;
   timeoutMs: number;
   retry: { max: number; baseDelayMs: number; maxDelayMs: number };
-  failOnUploadError: boolean;
   attachScreenshots: boolean;
   includeStepHooks: boolean;
   maxAttachmentBytes: number;
   maxTotalAttachmentBytes: number;
-  uploadVideos: boolean;
   maxVideoBytes: number;
   debug: boolean;
   enabled: boolean;
-  outputFile?: string;
+  outputDir: string;
+  shardIndex?: number;
 }
 
 function firstEnv(...names: string[]): string | undefined {
@@ -122,17 +125,39 @@ function envInt(...names: string[]): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Thrown when a required value (currently only `token`) can't be resolved.
- * Deliberately thrown synchronously at formatter-construction time (i.e. as
- * soon as `cucumber-js` instantiates the formatter, before any scenario
- * runs) rather than deferred to the final upload — failing fast before any
- * scenario runs wastes far less CI time than discovering a misconfiguration
- * only at the very end of the run. */
-export class QualflareConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'QualflareConfigError';
+/** Best-effort read of cucumber-js's own `--shard INDEX/TOTAL` flag from
+ * `process.argv`, returned 0-based.
+ *
+ * cucumber-js does parse this flag, but routes it to
+ * `configuration.sources.shard`, while a formatter is only ever handed
+ * `configuration.options` (see `api/formatters.js`) — so there is no
+ * supported API for a formatter to read it. argv is the one place it is
+ * observable, and only when the user passed it on the command line rather
+ * than via a `cucumber.js` config file; that is why this sits BELOW
+ * `QUALFLARE_SHARD_INDEX` in precedence rather than replacing it.
+ *
+ * cucumber documents the flag's index as 1-based ("The index starts at 1")
+ * and normalizes it internally with `parseInt(idx) - 1`; we match that, so
+ * `--shard 1/3` is shard 0. A malformed value yields `undefined` rather
+ * than a wrong shard label — cucumber validates the same `<n>/<n>` shape
+ * and would already have rejected it. */
+function argvShardIndex(argv: readonly string[] = process.argv): number | undefined {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === undefined) {
+      continue;
+    }
+    const raw = arg === '--shard' ? argv[i + 1] : arg.startsWith('--shard=') ? arg.slice('--shard='.length) : undefined;
+    if (raw === undefined) {
+      continue;
+    }
+    if (!/^\d+\/\d+$/.test(raw)) {
+      return undefined;
+    }
+    const oneBased = Number.parseInt(raw.split('/')[0] ?? '', 10);
+    return Number.isFinite(oneBased) && oneBased >= 1 ? oneBased - 1 : undefined;
   }
+  return undefined;
 }
 
 /** Resolves the full formatter configuration from, in order: the explicit
@@ -169,24 +194,8 @@ export function resolveConfig(
 
   const enabled = options.enabled ?? envBool('QUALFLARE_ENABLED') ?? true;
   // `||`, not `??` — matching `environment`/`language` below: an explicit
-  // `outputFile: ''` must fall through exactly like an unset option, not be
-  // treated as "set" by the token check above while every actual write site
-  // (formatter.ts) treats it as falsy and silently falls back to the normal
-  // POST path with an empty token.
-  const outputFile = options.outputFile || firstEnv('QUALFLARE_OUTPUT_FILE');
-
-  const token = options.token ?? firstEnv('QUALFLARE_TOKEN', 'QF_TOKEN') ?? '';
-  // In file-output mode nothing is ever POSTed by this process — a separate
-  // qualflare-cli run merges/uploads the written file later, with its own
-  // token — so requiring one here would block a legitimate CI setup that
-  // deliberately never gives this process credentials.
-  if (enabled && outputFile === undefined && token === '') {
-    throw new QualflareConfigError(
-      'qualflare-cucumberjs: no token configured. Set the `token` format option or the ' +
-        'QUALFLARE_TOKEN (or QF_TOKEN) environment variable, or pass `enabled: false` to disable ' +
-        'this formatter.',
-    );
-  }
+  const outputDir = options.outputDir || firstEnv('QUALFLARE_OUTPUT_DIR') || './qualflare-results';
+  const shardIndex = options.shardIndex ?? envInt('QUALFLARE_SHARD_INDEX') ?? argvShardIndex();
 
   const milestoneRaw = options.milestone !== undefined ? options.milestone : envInt('QUALFLARE_MILESTONE', 'QF_MILESTONE');
   const milestone = milestoneRaw !== undefined && milestoneRaw !== null && milestoneRaw >= 1 ? milestoneRaw : null;
@@ -208,13 +217,10 @@ export function resolveConfig(
   const ciPrNumber = options.ciPrNumber ?? detectedCi.ciPrNumber;
 
   return {
-    token,
     apiEndpoint: options.apiEndpoint ?? firstEnv('QUALFLARE_API_ENDPOINT') ?? 'https://api.qualflare.com',
     // `||` (truthy check), not `??`, for these three REQUIRED-non-empty wire
     // fields — an explicit `''` option must not silently win over the
-    // default (the server rejects an empty `environment`, and since
-    // `failOnUploadError` defaults `false`, that would fail the entire
-    // upload with no visible error by default). Ported verbatim from
+    // default (the server rejects an empty `environment`). Ported verbatim from
     // qualflare-cypress, where this was found via deep adversarial review.
     environment: (options.environment || undefined) ?? firstEnv('QUALFLARE_ENVIRONMENT', 'QF_ENVIRONMENT') ?? 'development',
     language: (options.language || undefined) ?? firstEnv('QUALFLARE_LANGUAGE', 'QF_LANGUAGE') ?? 'en-US',
@@ -236,25 +242,15 @@ export function resolveConfig(
       baseDelayMs: options.retry?.baseDelayMs ?? envInt('QUALFLARE_RETRY_BASE_DELAY_MS') ?? 1000,
       maxDelayMs: options.retry?.maxDelayMs ?? envInt('QUALFLARE_RETRY_MAX_DELAY_MS') ?? 30_000,
     },
-    failOnUploadError: options.failOnUploadError ?? envBool('QUALFLARE_FAIL_ON_UPLOAD_ERROR') ?? false,
     attachScreenshots: options.attachScreenshots ?? envBool('QUALFLARE_ATTACH_SCREENSHOTS') ?? true,
     includeStepHooks: options.includeStepHooks ?? envBool('QUALFLARE_INCLUDE_STEP_HOOKS') ?? false,
     maxAttachmentBytes: options.maxAttachmentBytes ?? envInt('QUALFLARE_MAX_ATTACHMENT_BYTES') ?? 1_500_000,
     maxTotalAttachmentBytes:
       options.maxTotalAttachmentBytes ?? envInt('QUALFLARE_MAX_TOTAL_ATTACHMENT_BYTES') ?? 750_000,
-    // Forced off in outputFile mode, regardless of what was configured: video
-    // upload needs a real token (this mode deliberately has none — see the
-    // token check above) and, even if it somehow succeeded, the resulting
-    // storageKey has no equivalent in qualflare-cli's merge parser and would
-    // be dropped at merge time anyway (see qualflare-cli's
-    // internal/adapters/parsers/native/qualflare/qualflare.go). Centralized
-    // here rather than checked at each of the several video-upload call
-    // sites (attachment-budget.ts, attempt-tracker.ts) — a call site that
-    // forgot this check was a real bug found in self-review.
-    uploadVideos: outputFile !== undefined ? false : (options.uploadVideos ?? envBool('QUALFLARE_UPLOAD_VIDEOS') ?? true),
     maxVideoBytes: options.maxVideoBytes ?? envInt('QUALFLARE_MAX_VIDEO_BYTES') ?? MAX_VIDEO_UPLOAD_BYTES,
     debug: options.debug ?? envBool('QUALFLARE_DEBUG', 'QF_DEBUG') ?? false,
     enabled,
-    outputFile,
+    outputDir,
+    shardIndex,
   };
 }
