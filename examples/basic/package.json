@@ -5,7 +5,7 @@
   "description": "Minimal example of using @qualflare/cucumberjs in a real CucumberJS project.",
   "type": "module",
   "devDependencies": {
-    "@qualflare/cucumberjs": "^0.1.0",
+    "@qualflare/cucumberjs": "^0.2.0",
     "@cucumber/cucumber": "^13.2.1"
   },
   "scripts": {
