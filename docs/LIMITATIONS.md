@@ -96,7 +96,7 @@ jobs:
           path: qualflare-results
           merge-multiple: true
       - run: |
-          npm install -g qualflare
+          npm install -g @qualflare/cli
           qf login ci "$QF_TOKEN" --force
           qf ci collect ./qualflare-results
         env:

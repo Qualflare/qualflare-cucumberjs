@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { logger } from '../shared/logger.js';
 import type { Attachment } from '../shared/types.js';
-import { writeVideoAttachment } from './video-uploader.js';
+import { writeVideoAttachment } from './video-writer.js';
 
 /** Extensions/mime-prefixes routed through the video-upload flow
  * (`resolveVideoAttachment`) instead of the inline-base64 path below.

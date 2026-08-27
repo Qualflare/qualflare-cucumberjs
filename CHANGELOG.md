@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `docs/LIMITATIONS.md`'s CI example installed the CLI as `qualflare`. The correct package name
+  is `@qualflare/cli`; the command as published would have failed. Introduced in 0.2.0.
+
+### Changed
+
+- `src/formatter/video-uploader.ts` renamed to `video-writer.ts`. Since 0.2.0 it writes files
+  into `outputDir` and uploads nothing, so the old name described work the module no longer does.
+  Internal only; the bundled entry points are unchanged.
+
 ## 0.2.0 — BREAKING
 
 - **Direct POST to `/collect` removed.** The formatter now only ever writes a report file (and any

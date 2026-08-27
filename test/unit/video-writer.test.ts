@@ -4,7 +4,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { writeVideoAttachment } from '../../src/formatter/video-uploader.js';
+import { writeVideoAttachment } from '../../src/formatter/video-writer.js';
 
 describe('writeVideoAttachment', () => {
   let tmpDir: string;
