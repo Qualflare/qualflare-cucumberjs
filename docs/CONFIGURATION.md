@@ -36,6 +36,7 @@ from that file (not from memory) if the two ever drift.
 | `maxVideoBytes` | `QUALFLARE_MAX_VIDEO_BYTES` | `50000000` | Per-video cap (bytes), checked before any upload attempt. Matches the server's own 50MB cap — raising this past it only wastes an upload the server will reject. |
 | `outputDir` | `QUALFLARE_OUTPUT_DIR` | `./qualflare-results` | Directory this process writes its report file (and any video attachments) into. Always active — the formatter never uploads. Every file is uniquely named, so parallel shards can share one directory safely. Upload with `qf <identifier> collect <outputDir>`. |
 | `shardIndex` | `QUALFLARE_SHARD_INDEX` | auto | This process's 0-based shard position, stamped onto every case. Falls back to scanning `process.argv` for cucumber-js's `--shard INDEX/TOTAL` (whose index is 1-based, and is converted). An attribution label only — `qualflare-cli` merges by directory contents, never by this. |
+| `runId` | `QUALFLARE_RUN_ID` | CI run id, else a per-process UUID | Identifies the run a report belongs to. Every shard of one CI run resolves the same value (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, …), so `qf collect` can tell shards of this run apart from a file left over by an earlier one and refuse to merge them. Needs `@qualflare/cli` v0.1.19+. Only set it yourself if your CI is not auto-detected and you shard. |
 | `debug` | `QUALFLARE_DEBUG` → `QF_DEBUG` | `false` | Logs extra detail to stderr. |
 | `enabled` | `QUALFLARE_ENABLED` | `true` | `false` fully disables tracking and upload — a complete no-op. |
 

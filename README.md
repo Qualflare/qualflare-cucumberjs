@@ -114,9 +114,9 @@ wrong value cannot fail at run time — this package makes no network calls — 
 
 ## Known limitations
 
-- **`outputDir` is merged blindly** — `qf collect` uploads every report file it finds, with no
-  run-identity check, so a directory left over from a previous run is silently merged into the
-  current one. Clear or freshly create `outputDir` at the start of each run.
+- **A stale `outputDir` is refused, not merged** — each report carries a `runId`, and `qf collect`
+  errors rather than merging files from two different runs. Needs `@qualflare/cli` v0.1.19+; older
+  CLIs merge as before.
 - **`shardIndex` is best-effort** — cucumber-js routes its own `--shard` flag somewhere a formatter
   cannot read, so it is recovered from `QUALFLARE_SHARD_INDEX` or by scanning `process.argv`. It is
   only an attribution label; merging never depends on it. See
