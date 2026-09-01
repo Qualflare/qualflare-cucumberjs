@@ -37,6 +37,7 @@ export function buildCollectPayload(suites: Suite[], config: ResolvedFormatterCo
       version: PACKAGE_VERSION,
       timestamp: new Date().toISOString(),
       cliName: 'qualflare-cucumberjs',
+      runId: config.runId,
     },
     properties: config.properties,
     suites,

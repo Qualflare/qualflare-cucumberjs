@@ -106,11 +106,17 @@ Every option can be set either as a `formatOptions` entry or via a `QUALFLARE_*`
 variable. Full table, precedence rules, and auto-detection behavior (git branch/commit, CI
 provider/build/PR) in [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md).
 
+One option is worth calling out because it fails late: `environment` is matched against the
+environment's **uid (slug)**, not its display name, so **Staging** in the UI is `staging` here. A
+wrong value cannot fail at run time — this package makes no network calls — so the run succeeds and
+`collect` 404s afterwards. See
+[the note in the configuration docs](./docs/CONFIGURATION.md#environment-is-matched-by-uid-not-display-name).
+
 ## Known limitations
 
-- **`outputDir` is merged blindly** — `qf collect` uploads every report file it finds, with no
-  run-identity check, so a directory left over from a previous run is silently merged into the
-  current one. Clear or freshly create `outputDir` at the start of each run.
+- **A stale `outputDir` is refused, not merged** — each report carries a `runId`, and `qf collect`
+  errors rather than merging files from two different runs. Needs `@qualflare/cli` v0.1.19+; older
+  CLIs merge as before.
 - **`shardIndex` is best-effort** — cucumber-js routes its own `--shard` flag somewhere a formatter
   cannot read, so it is recovered from `QUALFLARE_SHARD_INDEX` or by scanning `process.argv`. It is
   only an attribution label; merging never depends on it. See
