@@ -1,6 +1,7 @@
 import type { Pickle } from '@cucumber/messages';
 
-import { MAX_ATTEMPTS_PER_CASE, MAX_TAGS_PER_CASE } from '../shared/constants.js';
+import { MAX_ATTEMPTS_PER_CASE, MAX_ATTEMPT_MESSAGE_RUNES, MAX_TAGS_PER_CASE } from '../shared/constants.js';
+import { truncateRunes } from '../shared/text.js';
 import { msToNs } from '../shared/duration.js';
 import type { ManualStepRecord } from '../runtime/message-types.js';
 import type { Attachment, Attempt, Case, CasePriority, CaseStatus, Label, Link, NanosecondDuration, Step } from '../shared/types.js';
@@ -136,7 +137,10 @@ function buildAttempts(attempts: AttemptSnapshot[]): Attempt[] | undefined {
       duration: a.duration,
     };
     if (a.error) {
-      attempt.message = a.error;
+      // Bounded to what the server stores. The whole formatted error goes into
+      // `message` (see the note above), so this single field carries the stack
+      // too and is what makes an attempt unboundedly large.
+      attempt.message = truncateRunes(a.error, MAX_ATTEMPT_MESSAGE_RUNES);
     }
     return attempt;
   });
