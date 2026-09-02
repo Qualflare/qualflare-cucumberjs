@@ -132,15 +132,26 @@ value, not a formatted table or a multi-line text block. (Notably, `allure-cucum
 support Doc Strings at all — this is actually more complete than the most mature comparable reporter,
 just not ideal.)
 
-## Retries: final result + count only, no per-attempt detail
+## Retries: steps and metadata come from the final attempt only
 
-`Case.retryCount`/`Case.isFlaky` are the only retry-shaped fields the wire contract has — one `Case`
-maps to exactly one final result, with a count of how many attempts it took. There is no "attempt 1
-failed with error X, attempt 2 passed" structure anywhere in the schema. If you need distinct
-per-attempt error detail (not just the final attempt's), that has no home in the current backend —
-this matches exactly how `@qualflare/cypress`'s own retry mechanism already collapses to
-final-result-only, so it's a consistent, deliberate constraint across both reporters, not a gap
-specific to this one.
+Per-attempt **error detail** is no longer a gap — `Case.attempts` carries each attempt's status,
+duration and error, so "attempt 1 failed with error X, attempt 2 passed" is exactly what a retried
+scenario now reports. `@qualflare/cypress` and `@qualflare/playwright` send the same structure.
+
+What still collapses to the final attempt is everything *else*: steps, labels, links, tags,
+description, priority, properties and attachments. That one is deliberate rather than a limit of
+the schema. An abandoned attempt's step trace, replayed alongside the final one's, would
+misrepresent a single execution as if the same steps ran twice — so earlier attempts' steps are
+discarded, never merged.
+
+Two smaller consequences worth knowing:
+
+- A scenario that was **not** retried sends no `attempts` at all. There is no history in a run that
+  happened once, and the server discards a single-element array, so sending one would only spend
+  payload against the collect body limit.
+- Past 50 attempts the server keeps the first 49 plus the final one and drops the middle. A
+  scenario retrying more than fifty times is pathological; the launch still succeeds and
+  `retryCount` still reflects the true total.
 
 ## `BeforeStep`/`AfterStep` are off by default
 
