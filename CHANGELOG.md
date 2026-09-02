@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Per-attempt execution history on every retried scenario, sent as `Case.attempts`.
+
+  `--retry` re-runs a pickle from scratch and `collapseAttempts` kept only the last run, so a
+  scenario that failed twice and then passed reported `retryCount: 2` with no record of
+  either failure.
+
+  Each attempt's status, duration and error is now sent individually, including the final
+  one. A scenario that was not retried sends nothing, and steps/labels/attachments still come
+  from the final attempt only. Requires an API that stores attempt history; older servers
+  ignore the field.
+
 ## 0.3.0
 
 ### Added

@@ -1,9 +1,9 @@
 import type { Pickle } from '@cucumber/messages';
 
-import { MAX_TAGS_PER_CASE } from '../shared/constants.js';
+import { MAX_ATTEMPTS_PER_CASE, MAX_TAGS_PER_CASE } from '../shared/constants.js';
 import { msToNs } from '../shared/duration.js';
 import type { ManualStepRecord } from '../runtime/message-types.js';
-import type { Attachment, Case, CasePriority, CaseStatus, Label, Link, NanosecondDuration, Step } from '../shared/types.js';
+import type { Attachment, Attempt, Case, CasePriority, CaseStatus, Label, Link, NanosecondDuration, Step } from '../shared/types.js';
 import type { GherkinIndex } from './gherkin-index.js';
 
 /** One attempt of a scenario — cucumber-js's `--retry` re-runs the same
@@ -41,6 +41,11 @@ export interface CollapsedResult {
   duration: NanosecondDuration;
   retryCount: number;
   isFlaky: boolean;
+  /** Per-attempt history, present only when the scenario actually retried
+   * (>= 2 attempts). Durations are NANOSECONDS, as everywhere in this module
+   * — cucumber-js reports nanosecond-precision natively, so unlike the Cypress
+   * port there is no ms round-trip anywhere on this path. */
+  attempts?: Attempt[];
   error?: string;
   /** Only the FINAL attempt's steps — an abandoned (retried) attempt's step
    * trace would misrepresent a single execution as if the same commands ran
@@ -85,6 +90,58 @@ function combineSteps(realSteps: Step[], manualSteps: ManualStepRecord[]): Step[
  * the final `testCaseFinished` is the caller's signal that all attempts have
  * arrived; this function only does the collapse.
  */
+/**
+ * Builds the per-attempt history, or `undefined` when there is nothing worth
+ * sending.
+ *
+ * The rest of `collapseAttempts` keeps only the final attempt's data — steps,
+ * labels, attachments — because an abandoned attempt's step trace would
+ * misrepresent one execution as if the same commands ran twice. That reasoning
+ * does not apply here: these ARE separate executions, and saying so is the
+ * whole point. `retryCount` says a scenario retried; this says what failed
+ * each time.
+ *
+ * # Why a single attempt sends nothing
+ *
+ * The server discards a one-element array — a scenario that ran once has no
+ * history beyond what the Case already carries — so sending one spends payload
+ * against the 10MB body limit for a row that is dropped.
+ *
+ * # Why the error goes to `message`
+ *
+ * `AttemptSnapshot.error` is already a single formatted string; cucumber-js
+ * does not hand back a separate stack. Splitting it to fill `trace` would need
+ * to guess where the message ends, and a multiline Gherkin assertion message
+ * would be corrupted by that guess. The server truncates `message` at 8192
+ * runes rather than rejecting, and the Case's own `error` still carries the
+ * final attempt's full text.
+ */
+function buildAttempts(attempts: AttemptSnapshot[]): Attempt[] | undefined {
+  if (attempts.length < 2) {
+    return undefined;
+  }
+
+  // Past the cap the server keeps the first 49 plus the final one, dropping the
+  // middle. Mirroring that here means the bytes are never sent, and the FINAL
+  // attempt survives the trim — a plain slice(0, 50) would discard it.
+  let kept = attempts;
+  if (attempts.length > MAX_ATTEMPTS_PER_CASE) {
+    kept = [...attempts.slice(0, MAX_ATTEMPTS_PER_CASE - 1), attempts[attempts.length - 1]!];
+  }
+
+  return kept.map((a, i) => {
+    const attempt: Attempt = {
+      attempt: i + 1,
+      status: a.status,
+      duration: a.duration,
+    };
+    if (a.error) {
+      attempt.message = a.error;
+    }
+    return attempt;
+  });
+}
+
 export function collapseAttempts(attempts: AttemptSnapshot[]): CollapsedResult {
   if (attempts.length === 0) {
     throw new Error('collapseAttempts: at least one attempt is required');
@@ -93,12 +150,14 @@ export function collapseAttempts(attempts: AttemptSnapshot[]): CollapsedResult {
   const retryCount = attempts.length - 1;
   const isFlaky = retryCount > 0 && final.status === 'passed' && attempts.some((a) => a.status !== 'passed');
   const duration = attempts.reduce((sum, a) => sum + a.duration, 0);
+  const attemptHistory = buildAttempts(attempts);
 
   return {
     status: final.status,
     duration,
     retryCount,
     isFlaky,
+    ...(attemptHistory ? { attempts: attemptHistory } : {}),
     error: final.status === 'passed' ? undefined : final.error,
     steps: combineSteps(final.steps, final.manualSteps),
     labels: final.labels,
@@ -155,6 +214,7 @@ export function buildCase(uri: string, pickle: Pickle, collapsed: CollapsedResul
     duration: collapsed.duration,
     retryCount: collapsed.retryCount || undefined,
     isFlaky: collapsed.isFlaky || undefined,
+    attempts: collapsed.attempts,
     error: collapsed.error,
     tags: tags.length > 0 ? tags : undefined,
     steps: collapsed.steps,
