@@ -125,8 +125,9 @@ wrong value cannot fail at run time — this package makes no network calls — 
   (workaround, not a first-class rendering).
 - **`BeforeStep`/`AfterStep` hooks are off by default** (`includeStepHooks`) — noisy for suites with
   global per-step instrumentation.
-- **`BeforeAll`/`AfterAll` attachments are not captured** — they belong to no scenario, so a
-  file attached from a global hook has nowhere to land in the report.
+- **`BeforeAll`/`AfterAll` attachments need the hook to fail** — a failed global hook becomes a
+  synthetic Case and its attachments land there; a passing one produces no Case, so they are
+  dropped.
 - **`parameter()` outside a step is not masked** — `masked` is a display hint for the UI; the
   server never redacts the value, so never put a real secret in one. See
   [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md#qualflareparameter-outside-a-step-has-no-masking).
