@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1
+
+### Changed
+
+- Documentation only; no code change. The README quickstart now states that videos are opt-in from
+  `@qualflare/cli` v0.1.20 (`--upload-artifacts=video`). Earlier CLI versions uploaded every video
+  automatically, so this is a change of default for anyone upgrading.
+
 ## 0.5.0
 
 ### Added
