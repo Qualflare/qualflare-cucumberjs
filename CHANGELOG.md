@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0
+
+### Added
+
+- **Attachments made inside a failing `BeforeAll`/`AfterAll` are captured.** A failed global hook
+  already became a synthetic Case in a `(global hooks)` Suite, but anything attached from inside it
+  was discarded — the attachment carries `testRunHookStartedId` rather than `testCaseStartedId`,
+  which is exactly the id that Case is keyed on.
+
+  They are buffered unresolved and only resolved once the hook is known to have failed, so a passing
+  hook spends none of the run's attachment budget. A passing hook still reports nothing, which stays
+  correct. Needs a cucumber-js new enough to populate `testRunHookStartedId`; where it is absent the
+  attachment is dropped exactly as before.
+
 ## 0.4.0
 
 ### Added
