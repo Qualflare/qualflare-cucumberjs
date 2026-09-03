@@ -24,7 +24,7 @@ export default class QualflareCucumberFormatter extends Formatter {
   private readonly testCaseIndex = new Map<string, TestCase>();
   private readonly attachmentBudget: AttachmentBudget;
   private readonly attemptTracker: AttemptTracker;
-  private readonly runHookTracker = new RunHookTracker();
+  private readonly runHookTracker: RunHookTracker;
   private readonly finishedCases: FinishedCase[] = [];
   /** One promise per `testCaseFinished` envelope, resolving once that
    * scenario's `AttemptTracker.finish()` (which itself awaits any pending
@@ -43,6 +43,7 @@ export default class QualflareCucumberFormatter extends Formatter {
     this.config = resolveConfig(options.parsedArgvOptions as QualflareCucumberOptions);
     this.hookIndex = buildHookIndex(options.supportCodeLibrary);
     this.attachmentBudget = new AttachmentBudget(this.config.maxTotalAttachmentBytes);
+    this.runHookTracker = new RunHookTracker(this.config, this.attachmentBudget);
     this.attemptTracker = new AttemptTracker(
       this.hookIndex,
       this.gherkin,

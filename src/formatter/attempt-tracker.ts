@@ -184,9 +184,9 @@ export class AttemptTracker {
   attachment(e: MessageAttachment): void {
     if (!e.testCaseStartedId) {
       // A BeforeAll/AfterAll-scoped attachment (`testRunHookStartedId` set
-      // instead) — there is no Case to attach it to; see `run-hook-tracker
-      // .ts`'s doc comment for why BeforeAll/AfterAll attachments are out of
-      // scope for v1.
+      // instead) never reaches here: formatter.ts offers it to RunHookTracker
+      // first, which claims it for the synthetic (global hooks) Case. Anything
+      // still arriving without a testCaseStartedId has no home at all.
       return;
     }
     const record = this.byTestCaseStartedId.get(e.testCaseStartedId);

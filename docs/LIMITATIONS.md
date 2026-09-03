@@ -168,13 +168,17 @@ hook's future sibling index before that step has even started).
 no opt-out for those, since they're far less noisy (at most one Before and one After per scenario) and
 a failing one is exactly the kind of thing that should never silently vanish from the report.
 
-## `BeforeAll`/`AfterAll` attachments are not captured
+## `BeforeAll`/`AfterAll` attachments land only on a FAILED hook
 
-A **failed** `BeforeAll`/`AfterAll` hook does become a synthetic Case (in a `(global hooks)` Suite —
-see the README), but any attachment made from inside one (via `this.attach()`) is not captured: these
-hooks run outside any scenario, so there's no Case for the attachment to belong to. A passing
-`BeforeAll`/`AfterAll` produces no Case at all — it has no useful signal to report, and would be pure
-noise on every run.
+A failed `BeforeAll`/`AfterAll` becomes a synthetic Case in a `(global hooks)` Suite, and anything
+attached from inside that hook (`this.attach()`) now lands on it.
+
+A **passing** hook still produces no Case, so its attachments are dropped — a passing `BeforeAll`
+has no useful signal to report and would be pure noise on every run. They are buffered unresolved
+and discarded, so a passing hook spends none of the run's attachment budget.
+
+Needs a cucumber-js new enough to populate `Attachment.testRunHookStartedId`. Where that field is
+absent the attachment is dropped exactly as it was before.
 
 ## `qualflare.parameter()` outside a step has no masking
 
