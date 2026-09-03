@@ -5,7 +5,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
 
 A native CucumberJS reporter for [Qualflare](https://qualflare.com) — captures test results directly
-from your `cucumber-js` run: Feature/Scenario status, real retry counts, screenshots, videos,
+from your `cucumber-js` run: Feature/Scenario status, per-attempt retry history, screenshots, videos,
 Given/When/Then step traces, Scenario Outline rows, and author-facing metadata (labels, links, tags,
 custom attachments).
 
@@ -113,7 +113,6 @@ wrong value cannot fail at run time — this package makes no network calls — 
 [the note in the configuration docs](./docs/CONFIGURATION.md#environment-is-matched-by-uid-not-display-name).
 
 ## Known limitations
-
 - **A stale `outputDir` is refused, not merged** — each report carries a `runId`, and `qf collect`
   errors rather than merging files from two different runs. Needs `@qualflare/cli` v0.1.19+; older
   CLIs merge as before.
@@ -125,6 +124,20 @@ wrong value cannot fail at run time — this package makes no network calls — 
   (workaround, not a first-class rendering).
 - **`BeforeStep`/`AfterStep` hooks are off by default** (`includeStepHooks`) — noisy for suites with
   global per-step instrumentation.
+- **`BeforeAll`/`AfterAll` attachments are not captured** — they belong to no scenario, so a
+  file attached from a global hook has nowhere to land in the report.
+- **`parameter()` outside a step is not masked** — `masked` is a display hint for the UI; the
+  server never redacts the value, so never put a real secret in one. See
+  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md#qualflareparameter-outside-a-step-has-no-masking).
+- **Attachment caps are two budgets, not one pool** — `maxAttachmentBytes` bounds a single
+  attachment and `maxTotalAttachmentBytes` the whole run; anything over either is dropped
+  outright rather than truncated. Raising them is the easiest way to push a request past
+  `/collect`'s body limit. See
+  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md#per-caseper-attachment-caps-are-independent-not-pooled).
+- **Retries carry per-attempt errors, but everything else is the final attempt** — `Case.attempts`
+  records each attempt's status, duration and error; steps, labels, links, tags, priority,
+  properties and attachments come from the last attempt only, so an abandoned attempt's step trace
+  is discarded rather than replayed alongside the final one.
 
 Full details in [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md).
 
