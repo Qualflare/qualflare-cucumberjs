@@ -113,6 +113,7 @@ wrong value cannot fail at run time — this package makes no network calls — 
 [the note in the configuration docs](./docs/CONFIGURATION.md#environment-is-matched-by-uid-not-display-name).
 
 ## Known limitations
+
 - **A stale `outputDir` is refused, not merged** — each report carries a `runId`, and `qf collect`
   errors rather than merging files from two different runs. Needs `@qualflare/cli` v0.1.19+; older
   CLIs merge as before.
