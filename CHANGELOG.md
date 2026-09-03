@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. A scenario that was not retried sends nothing, and steps/labels/attachments still come
   from the final attempt only. Requires an API that stores attempt history; older servers
   ignore the field.
+
+  Each attempt's error is bounded to 8192 characters, matching what the server stores. The
+  Case's own `error` field is unaffected.
 
 ## 0.3.0
 
