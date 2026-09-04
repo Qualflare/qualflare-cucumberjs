@@ -27,6 +27,7 @@ import { collapseAttempts, type AttemptSnapshot, type CollapsedResult } from './
 import type { GherkinIndex } from './gherkin-index.js';
 import type { HookIndex } from './hook-index.js';
 import { mapHookStep, mapPickleStep, mapStatus } from './step-mapper.js';
+import { buildParameter, propertyValue } from '../shared/parameters.js';
 
 export interface FinishedAttempts {
   uri: string;
@@ -278,9 +279,9 @@ export class AttemptTracker {
         if (openStepIndex !== undefined) {
           const step = record.manualSteps[openStepIndex]!;
           step.parameters = step.parameters ?? [];
-          step.parameters.push({ name: message.name, value: message.value, masked: message.masked });
+          step.parameters.push(buildParameter(message.name, message.value, message.masked));
         } else {
-          record.properties[message.name] = message.value ?? '';
+          record.properties[message.name] = propertyValue(message.value, message.masked);
         }
         return;
       }
