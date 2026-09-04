@@ -147,13 +147,26 @@ This used to be a display hint only — the real value was sent, stored in plain
 through the API, while the UI drew dots over it. Anyone who trusted the name got no protection at
 all, which is why the docs had to say "never put a real secret in one". They no longer do.
 
-## Per-case/per-attachment caps are independent, not pooled
+## Attachment caps
 
-`maxAttachmentBytes` (per attachment) and `maxTotalAttachmentBytes` (per run) govern every attachment
-this reporter uploads, from whatever source (a real `this.attach()` call you already make,
-`qualflare.attachment()`, or `qualflare.attachmentFromFile()`) — but the count cap
-(`MAX_ATTACHMENTS_PER_CASE`) and the step cap (`MAX_STEPS_PER_TEST_ATTEMPT`) aren't pooled separately
-per source; everything shares the same running total per scenario/attempt.
+`maxAttachmentBytes` (5MB) bounds a single attachment; `maxTotalAttachmentBytes` (10MB) bounds the
+run. Anything over either is dropped with a warning rather than truncated — a half-written screenshot
+is worse than none.
+
+They used to be 1.5MB and 750KB, and the run budget being *smaller* than the per-item cap was the
+tell: every attachment was base64-inlined into `/collect`'s 10MB body, competing with the test
+results, so the per-run number had to assume this process was one shard among many. It was a poor
+assumption either way — the cap is per process, and `collect` merges every shard into one request,
+so eleven shards each honouring 750KB still assembled a body over the limit and lost the whole
+launch to a 413.
+
+`@qualflare/cli` v0.1.22+ uploads attachments through the presigned-URL flow and references a
+`storageKey`, so the body no longer grows with them. These numbers now only bound the report file on
+disk.
+
+**They require that CLI version.** An older one still inlines, and these limits would push it past
+the body limit — the failure this change exists to remove. They stay bounded rather than unlimited
+so the worst case is one launch rather than an out-of-memory.
 
 ## Not limitations of this reporter
 
