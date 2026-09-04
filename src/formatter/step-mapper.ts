@@ -44,11 +44,17 @@ function formatError(result: TestStepResult): string | undefined {
 }
 
 /** Doc Strings and Data Tables have no dedicated field on the wire `Step`
- * contract (confirmed against `launch.go` — the only structured-payload
- * slot on a step is the flat `parameters` list) — encoded as one Parameter
- * each, documented as a workaround in `docs/LIMITATIONS.md`. A Data Table is
- * JSON-stringified as one Parameter rather than exploded into one Parameter
- * per cell, to avoid risking `MAX_PARAMETERS_PER_STEP` on a large table. */
+ * contract (confirmed against `launch.go` — the only structured-payload slot on
+ * a step is the flat `parameters` list), so each is encoded as a Parameter.
+ *
+ * Every value survives the trip; what the flat slot costs is presentation, not
+ * data — a table arrives as JSON rather than a rendered grid. A dedicated wire
+ * field plus UI rendering is the real fix, and it is a platform change, not one
+ * this reporter can make.
+ *
+ * A Data Table is JSON-stringified as ONE Parameter rather than exploded into
+ * one per cell: a 20x5 table would be 100 parameters and blow
+ * `MAX_PARAMETERS_PER_STEP`, taking the step's real parameters with it. */
 export function pickleStepArgumentToParameters(argument: PickleStepArgument | undefined): Parameter[] | undefined {
   if (!argument) {
     return undefined;
@@ -56,6 +62,15 @@ export function pickleStepArgumentToParameters(argument: PickleStepArgument | un
   const params: Parameter[] = [];
   if (argument.docString) {
     params.push({ name: 'docString', value: argument.docString.content });
+    // Gherkin lets a Doc String declare its media type (the `json` in
+    // `"""json`), and PickleDocString carries it. Reading only `content`
+    // discarded it outright — a small loss, but a real one rather than a
+    // rendering difference: it is the hint a viewer would syntax-highlight by,
+    // and nothing downstream could recover it. Emitted as its own Parameter
+    // only when present, so a Doc String without one is unchanged.
+    if (argument.docString.mediaType) {
+      params.push({ name: 'docStringMediaType', value: argument.docString.mediaType });
+    }
   }
   if (argument.dataTable) {
     const rows = argument.dataTable.rows.map((row) => row.cells.map((cell) => cell.value));

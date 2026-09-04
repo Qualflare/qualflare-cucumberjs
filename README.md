@@ -119,8 +119,6 @@ wrong value cannot fail at run time — this package makes no network calls — 
 
 ## Known limitations
 
-- **Doc Strings and Data Tables** have no dedicated wire field — encoded as a step `Parameter`
-  (workaround, not a first-class rendering).
 - **`BeforeAll`/`AfterAll` attachments need the hook to fail** — a failed global hook becomes a
   synthetic Case and its attachments land there; a passing one produces no Case, so they are
   dropped.

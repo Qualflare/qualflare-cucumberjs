@@ -68,19 +68,26 @@ produced a launch that looked entirely plausible and contained results nobody ra
 **On `@qualflare/cli` older than v0.1.21 you get one of those two older behaviours** — a refusal on
 v0.1.19–v0.1.20, and a silent merge before that.
 
-## Doc Strings and Data Tables have no dedicated wire field
+## Doc Strings and Data Tables render as JSON, not as a table
 
-The wire contract's only structured-payload slot on a step is the flat `Step.parameters[]` list —
-there is no dedicated Doc String or Data Table field. This reporter encodes:
-- A Doc String as one `Parameter{name: "docString", value: <the text>}`.
-- A Data Table as one `Parameter{name: "dataTable", value: <JSON-stringified rows>}` (one Parameter
-  for the whole table, not one per cell, to avoid risking the 50-parameters-per-step server cap on a
-  large table).
+Gherkin's structured step arguments survive the trip intact — every cell of a Data Table, every line
+of a Doc String, plus its media type where one is declared. What they do not get is a rendering: the
+wire `Step` contract's only structured slot is the flat `parameters` list, so a table arrives as
 
-This is a workaround, not a first-class rendering — the Qualflare UI shows it as a regular parameter
-value, not a formatted table or a multi-line text block. (Notably, `allure-cucumberjs` doesn't
-support Doc Strings at all — this is actually more complete than the most mature comparable reporter,
-just not ideal.)
+```
+dataTable   [["name","email"],["Alice","alice@corp.com"]]
+```
+
+rather than as a grid. Readable, not scannable.
+
+Nothing is lost and nothing this reporter does differently would change it — a dedicated wire field
+plus UI rendering is a platform change. It is recorded here because people notice the JSON and ask,
+not because data goes missing.
+
+A Data Table is stringified as ONE parameter rather than one per cell on purpose: a 20x5 table would
+be 100 parameters and blow the 50-per-step server cap, taking the step's real parameters with it.
+
+For context, `allure-cucumberjs` drops Doc Strings entirely.
 
 ## Retries: steps and metadata come from the final attempt only
 

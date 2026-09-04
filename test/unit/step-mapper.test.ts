@@ -31,6 +31,26 @@ describe('pickleStepArgumentToParameters', () => {
     expect(params).toEqual([{ name: 'docString', value: 'hello world' }]);
   });
 
+  // Gherkin lets a Doc String declare a media type (the `json` opening a
+  // triple-quoted block), and PickleDocString carries it. Reading only
+  // `content` discarded it -- a real loss rather than a rendering difference,
+  // since nothing downstream could recover the hint a viewer would
+  // syntax-highlight by.
+  it('preserves a Doc String media type when one is declared', () => {
+    const params = pickleStepArgumentToParameters({
+      docString: { content: '{"id":42}', mediaType: 'json', argumentIndex: 0 },
+    } as never);
+    expect(params).toEqual([
+      { name: 'docString', value: '{"id":42}' },
+      { name: 'docStringMediaType', value: 'json' },
+    ]);
+  });
+
+  it('emits no media-type Parameter when the Doc String declares none', () => {
+    const params = pickleStepArgumentToParameters({ docString: { content: 'plain', argumentIndex: 0 } } as never);
+    expect(params).toEqual([{ name: 'docString', value: 'plain' }]);
+  });
+
   it('encodes a Data Table as a single JSON-stringified "dataTable" Parameter, not one Parameter per cell', () => {
     const params = pickleStepArgumentToParameters({
       dataTable: {
