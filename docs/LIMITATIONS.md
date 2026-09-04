@@ -68,60 +68,6 @@ produced a launch that looked entirely plausible and contained results nobody ra
 **On `@qualflare/cli` older than v0.1.21 you get one of those two older behaviours** — a refusal on
 v0.1.19–v0.1.20, and a silent merge before that.
 
-### `shardIndex` is best-effort, and only a label
-
-Every case is stamped with a 0-based `shardIndex`, resolved from the `shardIndex` option, then
-`QUALFLARE_SHARD_INDEX`, then a scan of `process.argv` for `--shard INDEX/TOTAL`.
-
-cucumber-js does parse `--shard` itself, but routes it to `configuration.sources.shard`, while a
-formatter is only ever handed `configuration.options` — so there is no supported API for a formatter
-to read it, and argv is the only place it is observable. That works when the flag is on the command
-line, and finds nothing when sharding is configured via a `cucumber.js` config file; set
-`QUALFLARE_SHARD_INDEX` explicitly if you need it guaranteed.
-
-Note cucumber documents its own index as **1-based** ("The index starts at 1") and normalizes it
-internally with `parseInt(idx) - 1`; this reporter matches that, so `--shard 1/3` is `shardIndex: 0`.
-
-None of this affects correctness: merging is driven by directory contents, so an unresolved
-`shardIndex` costs attribution, never results.
-
-GitHub Actions example — every shard writes to the same directory, one job collects:
-
-```yaml
-jobs:
-  test:
-    strategy:
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - run: npx cucumber-js --shard ${{ matrix.shard }}/4
-        env:
-          QUALFLARE_OUTPUT_DIR: qualflare-results
-          # No token here — this formatter never authenticates.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qualflare-results-${{ matrix.shard }}
-          path: qualflare-results/
-
-  upload:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: qualflare-results-*
-          path: qualflare-results
-          merge-multiple: true
-      - run: |
-          npm install -g @qualflare/cli
-          qf login ci "$QF_TOKEN" --force
-          qf ci collect ./qualflare-results
-        env:
-          QF_TOKEN: ${{ secrets.QF_TOKEN }}
-```
-
-`qf` auto-detects this reporter's JSON output from its content — no `--format` flag needed.
-
 ## Doc Strings and Data Tables have no dedicated wire field
 
 The wire contract's only structured-payload slot on a step is the flat `Step.parameters[]` list —
@@ -200,3 +146,18 @@ this reporter uploads, from whatever source (a real `this.attach()` call you alr
 `qualflare.attachment()`, or `qualflare.attachmentFromFile()`) — but the count cap
 (`MAX_ATTACHMENTS_PER_CASE`) and the step cap (`MAX_STEPS_PER_TEST_ATTEMPT`) aren't pooled separately
 per source; everything shares the same running total per scenario/attempt.
+
+## Not limitations of this reporter
+
+Things cucumber-js itself does not do. They are recorded here because people ask why a cucumber-js launch
+looks different from the other reporters' — not because anything is being withheld. Each would need
+a change in cucumber-js, not here.
+
+**`--shard` is not visible to a formatter.** cucumber-js parses its own `--shard` flag into
+`configuration.sources.shard`, while a formatter is only ever handed `configuration.options` — there
+is no supported API to read it. This reporter scans `process.argv` instead, which works when the flag
+is on the command line and finds nothing when sharding comes from a `cucumber.js` config file. Set
+`QUALFLARE_SHARD_INDEX` explicitly if you need it guaranteed.
+
+`shardIndex` is an attribution label only; merging never depends on it, so a missing one costs the
+per-shard breakdown in the UI and nothing else.

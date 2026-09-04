@@ -119,14 +119,8 @@ wrong value cannot fail at run time — this package makes no network calls — 
 
 ## Known limitations
 
-- **`shardIndex` is best-effort** — cucumber-js routes its own `--shard` flag somewhere a formatter
-  cannot read, so it is recovered from `QUALFLARE_SHARD_INDEX` or by scanning `process.argv`. It is
-  only an attribution label; merging never depends on it. See
-  [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md).
 - **Doc Strings and Data Tables** have no dedicated wire field — encoded as a step `Parameter`
   (workaround, not a first-class rendering).
-- **`BeforeStep`/`AfterStep` hooks are off by default** (`includeStepHooks`) — noisy for suites with
-  global per-step instrumentation.
 - **`BeforeAll`/`AfterAll` attachments need the hook to fail** — a failed global hook becomes a
   synthetic Case and its attachments land there; a passing one produces no Case, so they are
   dropped.
