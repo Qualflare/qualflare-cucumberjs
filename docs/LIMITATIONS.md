@@ -44,79 +44,29 @@ single Launch. No `--shard` flag is needed on the CLI side.
 Requires [`qualflare-cli`](https://github.com/Qualflare/qualflare-cli) **v0.1.16 or newer** — the
 first release able to parse this format.
 
-### Stale files are refused, not merged
+### A leftover report does not need clearing
 
 Each report carries `metadata.runId` — the identifier every shard of one run shares and different
-runs do not (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, and so on; a per-process UUID outside CI). If
-`collect` finds files from more than one run it refuses to upload and names them:
+runs do not (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, and so on; a per-process UUID outside CI). When
+`collect` finds files from more than one run it uploads the run that just finished and says what it
+left out:
 
 ```
-Error: 2 different runs found in the report files:
-    run 17244102887: 1 file(s)  (stale.json)
-    run 17244981923: 2 file(s)  (shard-0.json, shard-1.json)
-  A stale file from an earlier run would be merged into this launch.
-  Clear the output directory before each run, or pass --allow-mixed-runs to upload anyway
+ignored 1 file(s) from 1 earlier run(s) (--allow-mixed-runs to include them)
+Processing 2 test result file(s)...
+OK Test results collected successfully
 ```
 
-Clearing `outputDir` at the start of each run is still the tidier habit — in CI it is usually free,
-since the workspace is fresh — but forgetting now costs a failed upload rather than a launch
-quietly containing results nobody ran.
+Nothing is deleted — the older files stay on disk, they are simply not uploaded.
+`--allow-mixed-runs` merges every run into one launch instead, which is occasionally what you want
+when several tools write into one directory.
 
-Needs `@qualflare/cli` v0.1.19 or newer. An older CLI ignores `runId` and merges as before.
+There was a period where this was stricter than it needed to be: `collect` refused the whole upload
+and left you to clear the directory by hand. Before that it merged the stale file silently, which
+produced a launch that looked entirely plausible and contained results nobody ran.
 
-### `shardIndex` is best-effort, and only a label
-
-Every case is stamped with a 0-based `shardIndex`, resolved from the `shardIndex` option, then
-`QUALFLARE_SHARD_INDEX`, then a scan of `process.argv` for `--shard INDEX/TOTAL`.
-
-cucumber-js does parse `--shard` itself, but routes it to `configuration.sources.shard`, while a
-formatter is only ever handed `configuration.options` — so there is no supported API for a formatter
-to read it, and argv is the only place it is observable. That works when the flag is on the command
-line, and finds nothing when sharding is configured via a `cucumber.js` config file; set
-`QUALFLARE_SHARD_INDEX` explicitly if you need it guaranteed.
-
-Note cucumber documents its own index as **1-based** ("The index starts at 1") and normalizes it
-internally with `parseInt(idx) - 1`; this reporter matches that, so `--shard 1/3` is `shardIndex: 0`.
-
-None of this affects correctness: merging is driven by directory contents, so an unresolved
-`shardIndex` costs attribution, never results.
-
-GitHub Actions example — every shard writes to the same directory, one job collects:
-
-```yaml
-jobs:
-  test:
-    strategy:
-      matrix:
-        shard: [1, 2, 3, 4]
-    steps:
-      - run: npx cucumber-js --shard ${{ matrix.shard }}/4
-        env:
-          QUALFLARE_OUTPUT_DIR: qualflare-results
-          # No token here — this formatter never authenticates.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qualflare-results-${{ matrix.shard }}
-          path: qualflare-results/
-
-  upload:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: qualflare-results-*
-          path: qualflare-results
-          merge-multiple: true
-      - run: |
-          npm install -g @qualflare/cli
-          qf login ci "$QF_TOKEN" --force
-          qf ci collect ./qualflare-results
-        env:
-          QF_TOKEN: ${{ secrets.QF_TOKEN }}
-```
-
-`qf` auto-detects this reporter's JSON output from its content — no `--format` flag needed.
+**On `@qualflare/cli` older than v0.1.21 you get one of those two older behaviours** — a refusal on
+v0.1.19–v0.1.20, and a silent merge before that.
 
 ## Doc Strings and Data Tables have no dedicated wire field
 
@@ -180,19 +130,55 @@ and discarded, so a passing hook spends none of the run's attachment budget.
 Needs a cucumber-js new enough to populate `Attachment.testRunHookStartedId`. Where that field is
 absent the attachment is dropped exactly as it was before.
 
-## `qualflare.parameter()` outside a step has no masking
+## `parameter()` masking redacts the value
 
-The wire contract has no scenario-level `Parameter[]` on a `Case` — only `Step.parameters` exists. A
-`qualflare.parameter()` call made while a `qualflare.step()` is open attaches to that step's
-parameters (masking respected); called outside any step, it becomes a `Case.properties` entry instead
-(the only scenario-level key/value bag the wire contract offers) — and `masked` has no analog on a
-plain string map, so it's silently ignored in that case. This is a real, documented limitation, not a
-bug — and matches `@qualflare/cypress`'s identical constraint.
+`{ masked: true }` drops the value before the report is written. The secret never leaves this
+process, so it is not stored server-side and cannot be read back through the API.
 
-## Per-case/per-attachment caps are independent, not pooled
+Inside a step, the parameter travels as `{ name, masked: true }` with no value, and the Qualflare UI
+renders `••••••` from the flag. Outside any step it lands in the case's `properties`, a flat
+`Record<string, string>` with nowhere to put the flag — so the value itself becomes `••••••`.
+Either way the report carries no secret.
 
-`maxAttachmentBytes` (per attachment) and `maxTotalAttachmentBytes` (per run) govern every attachment
-this reporter uploads, from whatever source (a real `this.attach()` call you already make,
-`qualflare.attachment()`, or `qualflare.attachmentFromFile()`) — but the count cap
-(`MAX_ATTACHMENTS_PER_CASE`) and the step cap (`MAX_STEPS_PER_TEST_ATTEMPT`) aren't pooled separately
-per source; everything shares the same running total per scenario/attempt.
+**The value is unrecoverable.** That is the point, but it is worth stating: masking is not a display
+toggle you can undo later. Mask a value you may need to read back and it is gone.
+
+This used to be a display hint only — the real value was sent, stored in plaintext and readable
+through the API, while the UI drew dots over it. Anyone who trusted the name got no protection at
+all, which is why the docs had to say "never put a real secret in one". They no longer do.
+
+## Attachment caps
+
+`maxAttachmentBytes` (5MB) bounds a single attachment; `maxTotalAttachmentBytes` (10MB) bounds the
+run. Anything over either is dropped with a warning rather than truncated — a half-written screenshot
+is worse than none.
+
+They used to be 1.5MB and 750KB, and the run budget being *smaller* than the per-item cap was the
+tell: every attachment was base64-inlined into `/collect`'s 10MB body, competing with the test
+results, so the per-run number had to assume this process was one shard among many. It was a poor
+assumption either way — the cap is per process, and `collect` merges every shard into one request,
+so eleven shards each honouring 750KB still assembled a body over the limit and lost the whole
+launch to a 413.
+
+`@qualflare/cli` v0.1.22+ uploads attachments through the presigned-URL flow and references a
+`storageKey`, so the body no longer grows with them. These numbers now only bound the report file on
+disk.
+
+**They require that CLI version.** An older one still inlines, and these limits would push it past
+the body limit — the failure this change exists to remove. They stay bounded rather than unlimited
+so the worst case is one launch rather than an out-of-memory.
+
+## Not limitations of this reporter
+
+Things cucumber-js itself does not do. They are recorded here because people ask why a cucumber-js launch
+looks different from the other reporters' — not because anything is being withheld. Each would need
+a change in cucumber-js, not here.
+
+**`--shard` is not visible to a formatter.** cucumber-js parses its own `--shard` flag into
+`configuration.sources.shard`, while a formatter is only ever handed `configuration.options` — there
+is no supported API to read it. This reporter scans `process.argv` instead, which works when the flag
+is on the command line and finds nothing when sharding comes from a `cucumber.js` config file. Set
+`QUALFLARE_SHARD_INDEX` explicitly if you need it guaranteed.
+
+`shardIndex` is an attribution label only; merging never depends on it, so a missing one costs the
+per-shard breakdown in the UI and nothing else.
