@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.1
+
+### Fixed
+
+- `docs/METADATA-API.md` still described `masked` as "a display hint for the UI only... do not pass a
+  real secret expecting it to be protected". That was the behaviour the previous release replaced —
+  the value is redacted before the report is written and never reaches the server. The API reference
+  is what people read to learn the option, and it said the opposite of what the code does.
+- `docs/CONFIGURATION.md` still advertised `maxAttachmentBytes` as `1500000` and
+  `maxTotalAttachmentBytes` as `750000`. The previous release raised them to 5MB and 10MB, so the
+  options table understated the real defaults by 6x and 13x.
+
+### Changed
+
+- Known limitations no longer lists the attachment caps or the masking behaviour. Both are things
+  this reporter does on purpose — one configurable, one a feature — rather than gaps. What survives
+  in `LIMITATIONS.md` is the part that constrains you: the caps require `@qualflare/cli` v0.1.22+.
+
+### Fixed (cucumber-js specific)
+
+- A Doc String's media type (the `json` opening a triple-quoted block) was discarded. `PickleDocString`
+  carries it and the encoder read only `content`, so the hint a viewer would syntax-highlight by never
+  reached the server. Now emitted as its own Parameter when present; a Doc String without one is
+  unchanged.
+- The Doc String / Data Table entry left Known limitations. Every value survives the trip — what the
+  flat `parameters` slot costs is rendering, which is a platform change rather than anything this
+  reporter could do differently.
+
 ## 0.6.0
 
 ### Changed
