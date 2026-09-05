@@ -29,7 +29,7 @@ jobs:
         with:
           # Matches ci.yml's unit job — the @cucumber/cucumber devDependency
           # requires Node 22+.
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci

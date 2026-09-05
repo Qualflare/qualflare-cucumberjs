@@ -20,7 +20,7 @@ jobs:
           # 22/24/26 (confirmed via `npm view @cucumber/cucumber@13 engines`)
           # — unlike qualflare-cypress's fixed Node 20, this floor climbs
           # with each cucumber-js major (see the integration matrix below).
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -79,9 +79,18 @@ jobs:
     needs: unit
     steps:
       - uses: actions/checkout@v4
+      # Node 24, for its npm 11. Dependabot regenerates package-lock.json with
+      # npm 11, which dedupes the wildcard `@types/node: *` that the framework
+      # packages depend on; npm 10 (Node 20 and 22) then rejects that lockfile as
+      # out of sync and every Dependabot PR fails in `npm ci` before it reaches
+      # the change it is testing. Node 20 is also EOL as of 2026-04-30.
+      #
+      # This is the build runtime only. `engines` still allows >=18, and the
+      # framework matrix below picks its own Node per leg -- do not fold this
+      # value into those.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm run build
