@@ -10,3 +10,8 @@ test/integration/fixtures/**/reports/
 # example project artifacts
 examples/**/node_modules/
 examples/**/reports/
+
+# Dogfood suite output (e2e/) — the report plus any screenshots it writes.
+# NOTE: this repo previously ignored no results directory at all; the
+# integration fixture only stays clean because it writes to a temp dir.
+e2e-results/

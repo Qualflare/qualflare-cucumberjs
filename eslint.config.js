@@ -12,6 +12,11 @@ export default tseslint.config(
       // resolution (imports '@qualflare/cucumberjs' by its published name,
       // not a relative path) — not part of this repo's own TS project graph.
       'examples/**',
+      // The dogfood suite: a standalone cucumber-js project whose steps are
+      // plain .js (matching the fixtures and examples, avoiding a tsx/ts-node
+      // dependency). Not in the TS project graph, so type-aware linting cannot
+      // parse it.
+      'e2e/**',
       'coverage/**',
       // Plain JS, not part of the TS project graph — no type-aware linting
       // needed for the flat config file itself.
