@@ -1,10 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { AttachmentBudget } from '../../src/formatter/attachment-budget.js';
 import { RunHookTracker } from '../../src/formatter/run-hook-tracker.js';
 import type { HookIndex } from '../../src/formatter/hook-index.js';
 
-const config = { attachScreenshots: true, maxAttachmentBytes: 10_000, maxTotalAttachmentBytes: 100_000 } as never;
+// A REAL outputDir: screenshots are written there now, so omitting it (which
+// the `as never` cast used to allow) would exercise a shape production cannot
+// have.
+const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qf-hook-att-'));
+const config = {
+  attachScreenshots: true,
+  maxAttachmentBytes: 10_000,
+  maxTotalAttachmentBytes: 100_000,
+  maxVideoBytes: 50_000_000,
+  outputDir,
+} as never;
+
+afterAll(() => {
+  fs.rmSync(outputDir, { recursive: true, force: true });
+});
 const hookIndex = { get: () => ({ kind: 'beforeAll', name: 'BeforeAll hook' }) } as unknown as HookIndex;
 
 function tracker() {

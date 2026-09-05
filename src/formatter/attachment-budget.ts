@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { logger } from '../shared/logger.js';
 import type { Attachment } from '../shared/types.js';
-import { writeVideoAttachment } from './video-writer.js';
+import { writeImageAttachment, writeVideoAttachment } from './video-writer.js';
 
 /** Extensions/mime-prefixes routed through the video-upload flow
  * (`resolveVideoAttachment`) instead of the inline-base64 path below.
@@ -128,6 +128,23 @@ export function resolvePendingAttachment(
   if (!config.attachScreenshots) {
     return undefined;
   }
+  // Screenshots go out of band like video, rather than base64 into the report.
+  // Tried first for both shapes, since in cucumber-js an image usually arrives
+  // as in-memory content from World.attach() rather than as a file. A non-image
+  // returns undefined and falls straight through to the inline paths below,
+  // unchanged -- and so does an image the writer could not place, so a failure
+  // costs the offload rather than the user's attachment.
+  const image = writeImageAttachment(pending, config.outputDir, config.maxAttachmentBytes);
+  if (image) {
+    return {
+      name: pending.name,
+      mimeType: image.mimeType,
+      localImagePath: image.localImagePath,
+      fileSize: image.fileSize,
+      stepIndex: pending.stepIndex,
+    };
+  }
+
   if (pending.content !== undefined) {
     const bytes = Buffer.byteLength(pending.content, 'base64');
     if (bytes > config.maxAttachmentBytes) {

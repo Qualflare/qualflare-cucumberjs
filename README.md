@@ -53,10 +53,18 @@ npx cucumber-js
 qf <your-project-identifier> collect ./qualflare-results
 ```
 
-> **Videos are opt-in from `@qualflare/cli` v0.1.20.** `collect` uploads the report itself
+> **Requires `@qualflare/cli` v0.1.24 or newer.** Screenshots are written into `outputDir` and
+> referenced by name (`localImagePath`) instead of being base64-inlined into the report, the same
+> way videos already were — including the ones you hand to `World.attach()`, which have no file on
+> disk and are written out for you. An older CLI does not read the field, and because such an
+> attachment carries neither content nor a storage key the server records it from its name alone —
+> an undownloadable placeholder. Upgrade the CLI before upgrading this formatter.
+>
+> **Videos are opt-in; screenshots are not.** `collect` uploads the report and the screenshots
 > always, but a video only when asked: `--upload-artifacts=video` (or `QF_UPLOAD_ARTIFACTS=video`).
-> Earlier CLI versions uploaded every video automatically. Nothing is dropped silently — `collect`
-> prints how many it skipped and the exact flag to include them.
+> Named kinds are *added* to that default, so asking for video does not turn screenshots off;
+> `--upload-artifacts=none` declines everything, screenshots included. Nothing is dropped silently —
+> `collect` prints how many it skipped and the exact flag to include them.
 
 That's it — Feature/Scenario results, retries, and any screenshots you already attach arrive as one
 Launch. See [`examples/basic/`](./examples/basic) for a complete runnable project.

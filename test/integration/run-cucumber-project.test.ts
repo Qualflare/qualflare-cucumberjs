@@ -197,6 +197,26 @@ describe('qualflare-cucumberjs against a real cucumber-js run', () => {
         expect.arrayContaining([expect.objectContaining({ name: 'note', mimeType: 'text/plain' })]),
       );
 
+      // A real qualflare.attachment() call with IMAGE content -- written into
+      // outputDir and referenced by localImagePath, never inlined. This is the
+      // in-memory shape (World.attach() / qualflare.attachment()), which in
+      // cucumber-js is how screenshots usually arrive.
+      const imageCase = allCases.find((c) => c.name === 'attaches a screenshot via qualflare.attachment()');
+      expect(imageCase).toBeDefined();
+      expect(imageCase.attachments).toHaveLength(1);
+      const shot = imageCase.attachments[0];
+      expect(shot.mimeType).toBe('image/png');
+      expect(shot.content).toBeUndefined();
+      expect(typeof shot.localImagePath).toBe('string');
+      const shotPath = path.join(outputDir, shot.localImagePath);
+      expect(fs.existsSync(shotPath)).toBe(true);
+      expect(shot.fileSize).toBe(fs.statSync(shotPath).size);
+      // A real PNG, not merely named one.
+      expect(fs.readFileSync(shotPath).subarray(0, 8)).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      );
+      expect(shot.storageKey).toBeUndefined();
+
       // A real qualflare.attachment() call with video content — must have
       // been written into outputDir and referenced by localVideoPath, not
       // inlined as base64 and not uploaded.
