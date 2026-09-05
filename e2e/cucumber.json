@@ -1,0 +1,22 @@
+{
+  "default": {
+    "//": "All paths here are relative to the CWD the npm script runs from (the repo root), NOT to this file -- unlike the Playwright and Cypress dogfood configs, which resolve against their own directory.",
+    "format": [
+      "./dist/formatter/index.js"
+    ],
+    "formatOptions": {
+      "outputDir": "./e2e-results",
+      "environment": "production",
+      "branch": null,
+      "commit": null
+    },
+    "paths": [
+      "e2e/features/"
+    ],
+    "require": [
+      "e2e/steps/**/*.js"
+    ],
+    "retry": 1,
+    "retryTagFilter": "@flaky"
+  }
+}
