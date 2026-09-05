@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # The devDependency (@cucumber/cucumber ^13.2.1) requires Node
           # 22/24/26 (confirmed via `npm view @cucumber/cucumber@13 engines`)
@@ -55,7 +55,7 @@ jobs:
             node: '22'
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -88,7 +88,7 @@ jobs:
       # This is the build runtime only. `engines` still allows >=18, and the
       # framework matrix below picks its own Node per leg -- do not fold this
       # value into those.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
