@@ -46,7 +46,7 @@ jobs:
         with:
           # 22, not 20: @cucumber/cucumber ^13 requires it, matching this
           # repo's other CI jobs.
-          node-version: 22
+          node-version: '24'
           cache: npm
 
       - run: npm ci
