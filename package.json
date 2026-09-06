@@ -13,7 +13,7 @@
     "flaky-tests",
     "test-reporting"
   ],
-  "homepage": "https://qualflare.com",
+  "homepage": "https://github.com/Qualflare/qualflare-cucumberjs#readme",
   "bugs": {
     "url": "https://github.com/Qualflare/qualflare-cucumberjs/issues"
   },
