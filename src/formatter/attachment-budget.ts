@@ -39,11 +39,25 @@ export interface PendingAttachment {
 }
 
 /**
- * Tracks cumulative attached bytes across the whole `cucumber-js` process
- * (one instance per formatter, reused across every attachment resolved),
- * so the final POST doesn't silently exceed the request body limit. Ported
- * verbatim in spirit from `@qualflare/cypress`'s `AttachmentBudget`.
+ * Running total of ENCODED inline attachment bytes for this process, so a single
+ * pathological run can't push a launch past the server's body limit.
+ *
+ * Encoded, not raw, because base64 is what actually travels and what the limit is
+ * measured against. Counting raw bytes made the cap mean 4/3 more than it said: a
+ * fully-used 10,000,000-byte budget is 13,333,336 bytes of `content`, which is
+ * 1.27x `/collect`'s BodyLimit(10<<20) = 10,485,760. See `base64Length`.
  */
+/**
+ * Length of `Buffer.toString("base64")` without producing it.
+ *
+ * base64 emits 4 characters per 3 input bytes, padded up. Computed arithmetically
+ * so the budget can be checked BEFORE a large buffer is encoded, rather than
+ * allocating the string only to discard it.
+ */
+export function base64Length(rawBytes: number): number {
+  return Math.ceil(rawBytes / 3) * 4;
+}
+
 export class AttachmentBudget {
   private used = 0;
 
@@ -91,10 +105,11 @@ function readAttachmentFile(filePath: string, maxAttachmentBytes: number, budget
       reason: `${size} bytes exceeds the configured per-attachment cap of ${maxAttachmentBytes} bytes`,
     };
   }
-  if (!budget.tryReserve(size)) {
+  const encoded = base64Length(size);
+  if (!budget.tryReserve(encoded)) {
     return {
       skipped: true,
-      reason: `would exceed this run's total attachment budget (${budget.usedBytes} bytes already used)`,
+      reason: `would exceed this run's total attachment budget (${budget.usedBytes} encoded bytes already used; this one needs ${encoded})`,
     };
   }
   try {
@@ -153,9 +168,11 @@ export function resolvePendingAttachment(
       );
       return undefined;
     }
-    if (!budget.tryReserve(bytes)) {
+    // pending.content IS the base64 payload, so its length is the exact encoded
+    // cost -- no need to derive it from the decoded size.
+    if (!budget.tryReserve(pending.content.length)) {
       logger.warn(
-        `skipping attachment "${pending.name}": would exceed this run's total attachment budget (${budget.usedBytes} bytes already used)`,
+        `skipping attachment "${pending.name}": would exceed this run's total attachment budget (${budget.usedBytes} encoded bytes already used; this one needs ${pending.content.length})`,
       );
       return undefined;
     }
