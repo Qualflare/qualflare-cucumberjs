@@ -88,12 +88,17 @@ describe('resolvePendingAttachment', () => {
     expect(result).toBeUndefined();
   });
 
-  it('resolves in-memory content, reserving its decoded byte size against the budget', () => {
+  it('resolves in-memory content, reserving its ENCODED size against the budget', () => {
     const budget = new AttachmentBudget(CONFIG.maxTotalAttachmentBytes);
     const content = Buffer.from('hello world').toString('base64');
     const result = resolvePendingAttachment({ name: 'note', mimeType: 'text/plain', content, stepIndex: 2 }, CONFIG, budget);
     expect(result).toEqual({ name: 'note', mimeType: 'text/plain', content, stepIndex: 2 });
-    expect(budget.usedBytes).toBe(Buffer.byteLength(content, 'base64'));
+    // `content` IS what the report carries, so its own length is the cost --
+    // 16 characters here, not the 11 decoded bytes of "hello world". Charging
+    // the decoded size understated every attachment by 4/3.
+    expect(budget.usedBytes).toBe(content.length);
+    expect(budget.usedBytes).toBe(16);
+    expect(Buffer.byteLength(content, 'base64')).toBe(11);
   });
 
   it('skips in-memory content exceeding the per-attachment cap, without reserving anything', () => {
