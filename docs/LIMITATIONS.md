@@ -1,9 +1,8 @@
 # Known limitations
 
-These are real, current constraints of `@qualflare/cucumberjs` v1 — documented deliberately rather
-than discovered by surprise. Several stem from Qualflare backend capabilities that don't exist yet
-(shared with [`@qualflare/cypress`](https://github.com/Qualflare/qualflare-cypress)); others are
-specific to how cucumber-js's Cucumber-Messages event stream exposes information to a reporter.
+These are real, current constraints of `@qualflare/cucumberjs` — documented deliberately rather than
+discovered by surprise. Most are specific to how cucumber-js's Cucumber-Messages event stream exposes
+information to a reporter.
 
 ## Video attachments are written, not uploaded
 
@@ -21,52 +20,6 @@ Controlled by `maxVideoBytes` (default 50MB, matching the server's own cap — c
 anything is written). A video that can't be written (oversized, unsupported format, unreadable
 source) is skipped with a logged warning, the same fail-open behavior as any other attachment. It
 never fails the run.
-
-## Sharded CI: point every shard at the same `outputDir`
-
-Qualflare's `/api/v1/collect` endpoint creates exactly one Launch per request, with no incremental
-or merge capability server-side. This reporter accumulates every scenario's results in memory for
-the lifetime of one `cucumber-js` process, then writes them as one uniquely-named JSON file at the
-formatter's `finished()` hook. It never uploads.
-
-- **`--parallel N`** runs worker *threads* inside the same OS process (cucumber-js's own documented
-  behavior) — the formatter always runs in the coordinator, seeing every worker's results, so it
-  produces one file regardless of N.
-- **`--shard INDEX/TOTAL`** is a different thing: each shard is a fully independent `cucumber-js`
-  invocation, typically on a separate CI job/machine, each with its own formatter instance and its
-  own output file.
-
-Merging is handled entirely by `qualflare-cli`: point every shard at the same `outputDir` and run
-`qf <identifier> collect <outputDir>` once at the end. Because each file's name is a UUID, shards
-sharing a directory never overwrite each other, and `collect` merges everything it finds into a
-single Launch. No `--shard` flag is needed on the CLI side.
-
-Requires [`qualflare-cli`](https://github.com/Qualflare/qualflare-cli) **v0.1.16 or newer** — the
-first release able to parse this format.
-
-### A leftover report does not need clearing
-
-Each report carries `metadata.runId` — the identifier every shard of one run shares and different
-runs do not (`GITHUB_RUN_ID`, `CI_PIPELINE_ID`, and so on; a per-process UUID outside CI). When
-`collect` finds files from more than one run it uploads the run that just finished and says what it
-left out:
-
-```
-ignored 1 file(s) from 1 earlier run(s) (--allow-mixed-runs to include them)
-Processing 2 test result file(s)...
-OK Test results collected successfully
-```
-
-Nothing is deleted — the older files stay on disk, they are simply not uploaded.
-`--allow-mixed-runs` merges every run into one launch instead, which is occasionally what you want
-when several tools write into one directory.
-
-There was a period where this was stricter than it needed to be: `collect` refused the whole upload
-and left you to clear the directory by hand. Before that it merged the stale file silently, which
-produced a launch that looked entirely plausible and contained results nobody ran.
-
-**On `@qualflare/cli` older than v0.1.21 you get one of those two older behaviours** — a refusal on
-v0.1.19–v0.1.20, and a silent merge before that.
 
 ## Doc Strings and Data Tables render as JSON, not as a table
 
@@ -93,7 +46,7 @@ For context, `allure-cucumberjs` drops Doc Strings entirely.
 
 Per-attempt **error detail** is no longer a gap — `Case.attempts` carries each attempt's status,
 duration and error, so "attempt 1 failed with error X, attempt 2 passed" is exactly what a retried
-scenario now reports. `@qualflare/cypress` and `@qualflare/playwright` send the same structure.
+scenario now reports.
 
 What still collapses to the final attempt is everything *else*: steps, labels, links, tags,
 description, priority, properties and attachments. That one is deliberate rather than a limit of
@@ -136,23 +89,6 @@ and discarded, so a passing hook spends none of the run's attachment budget.
 
 Needs a cucumber-js new enough to populate `Attachment.testRunHookStartedId`. Where that field is
 absent the attachment is dropped exactly as it was before.
-
-## `parameter()` masking redacts the value
-
-`{ masked: true }` drops the value before the report is written. The secret never leaves this
-process, so it is not stored server-side and cannot be read back through the API.
-
-Inside a step, the parameter travels as `{ name, masked: true }` with no value, and the Qualflare UI
-renders `••••••` from the flag. Outside any step it lands in the case's `properties`, a flat
-`Record<string, string>` with nowhere to put the flag — so the value itself becomes `••••••`.
-Either way the report carries no secret.
-
-**The value is unrecoverable.** That is the point, but it is worth stating: masking is not a display
-toggle you can undo later. Mask a value you may need to read back and it is gone.
-
-This used to be a display hint only — the real value was sent, stored in plaintext and readable
-through the API, while the UI drew dots over it. Anyone who trusted the name got no protection at
-all, which is why the docs had to say "never put a real secret in one". They no longer do.
 
 ## Attachment caps need `@qualflare/cli` v0.1.22+
 
