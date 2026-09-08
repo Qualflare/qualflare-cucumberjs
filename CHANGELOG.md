@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2
+
+Package metadata only — no code change, and nothing to do if you are already on
+0.7.1.
+
+`homepage` now points at https://qualflare.com/cucumber-test-reporting/ instead
+of falling back to the GitHub README, `description` says what the formatter
+actually captures rather than naming the platform, and `keywords` matches the
+rest of the reporter family.
+
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
