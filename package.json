@@ -1,19 +1,20 @@
 {
   "name": "@qualflare/cucumberjs",
   "version": "0.7.1",
-  "description": "Native CucumberJS reporter for the Qualflare test-management platform.",
+  "description": "Native CucumberJS formatter for Qualflare — captures Gherkin step traces, Scenario Outline rows, per-attempt retry history, screenshots and metadata.",
   "keywords": [
     "qualflare",
     "cucumber",
     "cucumberjs",
-    "bdd",
-    "gherkin",
+    "cucumber-reporter",
     "test-reporter",
+    "test-reporting",
     "test-results",
     "flaky-tests",
-    "test-reporting"
+    "bdd",
+    "gherkin"
   ],
-  "homepage": "https://github.com/Qualflare/qualflare-cucumberjs#readme",
+  "homepage": "https://qualflare.com/cucumber-test-reporting/",
   "bugs": {
     "url": "https://github.com/Qualflare/qualflare-cucumberjs/issues"
   },
