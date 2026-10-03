@@ -1,6 +1,6 @@
 {
   "name": "@qualflare/cucumberjs",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Native CucumberJS formatter for Qualflare — captures Gherkin step traces, Scenario Outline rows, per-attempt retry history, screenshots and metadata.",
   "keywords": [
     "qualflare",
